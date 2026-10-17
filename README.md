@@ -7,6 +7,17 @@ config>System Config>Advanced>Factory Reset
 
 # Cardputer-ADV-CC1101-NRF24L01-LoRa
 
+The firmware in this repository is Bruce **1.16** for the M5Stack Cardputer ADV with the external CC1101 / NRF24L01 / LoRa module. Flash `Bruce1.16-m5stack-cardputer.bin` (the same image is `AdvC&N&L.bin` inside `ADV Lora CC1101 NRF.zip`) at offset `0x0`, then do the factory reset above.
+
+Pins used by this build:
+
+- CC1101: GDO0 = GPIO13, SS = GPIO15, SPI shared with the SD bus (SCK 40, MOSI 14, MISO 39)
+- NRF24L01: CE = GPIO8, SS = GPIO9, same SPI bus. GPIO8/GPIO9 are switched back to I2C only while the keyboard or audio codec is accessed
+- LoRa: CS = GPIO5, RST = GPIO3, DIO0 = GPIO4
+- GPS stays on the Grove port (RX = GPIO1, TX = GPIO2) so it does not collide with the CC1101 pins
+
+The sections below describe the source changes this image is built from.
+
 ![9082439408](https://github.com/user-attachments/assets/f7679754-3829-4d2e-b69f-2b8fac79e70f)
 
 Firmware Download Procedure
