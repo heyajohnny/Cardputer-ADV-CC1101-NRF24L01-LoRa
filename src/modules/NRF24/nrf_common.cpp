@@ -27,6 +27,27 @@ void nrf_info() {
     while (!check(AnyKeyPress)) { vTaskDelay(pdMS_TO_TICKS(1)); }
 }
 
+void nrf_wait_keyboard_idle(unsigned long maxWaitMs) {
+    unsigned long waitStart = millis();
+    unsigned long idleSince = 0;
+    while (millis() - waitStart < maxWaitMs) {
+        if (EscPress) break;
+        if (digitalRead(11) == HIGH && !isSysI2CKeyHeld()) {
+            if (idleSince == 0) {
+                idleSince = millis();
+            } else if (millis() - idleSince >= 35) {
+                return;
+            }
+        } else {
+            idleSince = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (digitalRead(11) == HIGH) {
+        setSysI2CKeyHeld(false);
+    }
+}
+
 bool nrf_start(NRF24_MODE mode) {
     bool result = false;
 
@@ -61,16 +82,9 @@ bool nrf_start(NRF24_MODE mode) {
 
     if (!CHECK_NRF_SPI(mode)) return result;
 
-    // Wait so any key-release interrupt from pressing Enter on the menu is
-    // drained by InputHandler before NRF24 takes over GPIO8/GPIO9.
-    unsigned long waitStart = millis();
-    while (millis() - waitStart < 300) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-        if (digitalRead(11) == HIGH && !AnyKeyPress && !SelPress) {
-            vTaskDelay(pdMS_TO_TICKS(60));
-            if (digitalRead(11) == HIGH) break;
-        }
-    }
+    // Wait until any held key is physically released and its key-release interrupt
+    // on GPIO11 is drained by InputHandler before NRF24 takes over GPIO8/GPIO9.
+    nrf_wait_keyboard_idle(450);
 
     lockSysI2CBus();
 
@@ -80,9 +94,9 @@ bool nrf_start(NRF24_MODE mode) {
     pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
     pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
     digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(5);
     digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(5);
     digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
     delay(5); // Let pins settle before SPI traffic
 
@@ -100,20 +114,20 @@ bool nrf_start(NRF24_MODE mode) {
     );
     delay(10);
 
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        NRFradio.stopConstCarrier();
-        delayMicroseconds(500);
-        NRFradio.powerDown();
-        delay(2);
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
+        pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
+        digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+        delayMicroseconds(5);
+        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+        delayMicroseconds(5);
+        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+        delay(5);
         if (NRFradio.begin(
                 NRFSPI,
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
             )) {
-            NRFradio.stopConstCarrier();
-            delayMicroseconds(500);
-            NRFradio.powerUp();
-            delayMicroseconds(200);
             NRFradio.setPALevel(RF24_PA_MAX, true);
             result = true;
             break;

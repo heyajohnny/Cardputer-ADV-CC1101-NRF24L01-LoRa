@@ -652,7 +652,7 @@ static bool mj_scan() {
     // Configure promiscuous mode
     uint32_t lastMjI2cSwitchCount = 0;
     auto configureMjScanRadio = [&](bool rebegin) {
-        for (int attempt = 0; attempt < 3; ++attempt) {
+        for (int attempt = 0; attempt < 4; ++attempt) {
             pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
             pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
             digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
@@ -662,20 +662,16 @@ static bool mj_scan() {
             digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
             delayMicroseconds(5);
             if (rebegin || attempt > 0) {
-                NRFradio.stopConstCarrier();
-                delayMicroseconds(500);
-                NRFradio.powerDown();
-                delay(2);
-                NRFradio.begin(
-                    NRFSPI,
-                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
-                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
-                );
+                delay(5);
+                if (!NRFradio.begin(
+                        NRFSPI,
+                        rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
+                        rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
+                    )) {
+                    delay(5);
+                    continue;
+                }
             }
-            NRFradio.stopConstCarrier();
-            delayMicroseconds(500);
-            NRFradio.powerUp();
-            delayMicroseconds(200);
             NRFradio.setPALevel(RF24_PA_MAX, true);
             NRFradio.setAutoAck(false);
             NRFradio.disableCRC();
@@ -696,11 +692,13 @@ static bool mj_scan() {
             };
             for (uint8_t i = 0; i < 6; i++) { NRFradio.openReadingPipe(i, noiseAddress[i]); }
             NRFradio.setChannel(42);
-            if (NRFradio.getChannel() == 42 && NRFradio.getPALevel() == RF24_PA_MAX) {
+            if (NRFradio.getChannel() == 42 &&
+                NRFradio.isChipConnected() &&
+                NRFradio.getPALevel() == RF24_PA_MAX) {
                 lastMjI2cSwitchCount = getSysI2CPinsSwitchCount();
                 return;
             }
-            delay(2);
+            delay(5);
         }
     };
 
@@ -723,8 +721,19 @@ static bool mj_scan() {
             }
             if (AnyKeyPress && !EscPress) { AnyKeyPress = false; }
 
+            if (digitalRead(11) == LOW || isSysI2CKeyHeld() ||
+                getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount) {
+                nrf_wait_keyboard_idle(450);
+                if (check(EscPress)) {
+                    scanning = false;
+                    break;
+                }
+            }
+
             lockSysI2CBus();
-            if (getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount || NRFradio.getPALevel() != RF24_PA_MAX) {
+            if (getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount ||
+                !NRFradio.isChipConnected() ||
+                NRFradio.getPALevel() != RF24_PA_MAX) {
                 configureMjScanRadio(true);
             }
             NRFradio.setChannel(ch);

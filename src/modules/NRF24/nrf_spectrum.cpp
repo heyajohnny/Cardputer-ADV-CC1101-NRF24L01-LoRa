@@ -36,26 +36,20 @@ static void prepareSharedNrfPins() {
 }
 
 static void configureSpectrumRadio(bool rebegin) {
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    for (int attempt = 0; attempt < 4; ++attempt) {
         prepareSharedNrfPins();
 
         if (rebegin || attempt > 0) {
-            // Cleanly exit any continuous wave or active RX/TX state and give the PA+LNA /
-            // Si24R1 crystal oscillator time to settle before re-initializing registers.
-            NRFradio.stopConstCarrier();
-            delayMicroseconds(500);
-            NRFradio.powerDown();
-            delay(2);
-            NRFradio.begin(
-                NRFSPI,
-                rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
-                rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
-            );
+            delay(5);
+            if (!NRFradio.begin(
+                    NRFSPI,
+                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
+                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
+                )) {
+                delay(5);
+                continue;
+            }
         }
-        NRFradio.stopConstCarrier();
-        delayMicroseconds(500);
-        NRFradio.powerUp();
-        delayMicroseconds(200);
         NRFradio.setPALevel(RF24_PA_MAX, true);
         NRFradio.setAutoAck(false);
         NRFradio.disableCRC();       // accept any signal we find
@@ -82,14 +76,16 @@ static void configureSpectrumRadio(bool rebegin) {
         delayMicroseconds(2);
         digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
 
-        // Verify that a non-zero register written above reads back intact
-        // before marking the radio as configured.
+        // Verify both non-default (SETUP_AW == 0) and non-zero (RF_CH == 42, PA == MAX)
+        // registers read back intact before marking the radio as configured.
         NRFradio.setChannel(42);
-        if (NRFradio.getChannel() == 42 && NRFradio.getPALevel() == RF24_PA_MAX) {
+        if (NRFradio.getChannel() == 42 &&
+            NRFradio.isChipConnected() &&
+            NRFradio.getPALevel() == RF24_PA_MAX) {
             lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount();
             return;
         }
-        delay(2);
+        delay(5);
     }
 }
 
@@ -98,9 +94,17 @@ static void configureSpectrumRadio(bool rebegin) {
 String scanChannels(bool web) {
     String result = "{";
 
+    if (digitalRead(11) == LOW || isSysI2CKeyHeld() ||
+        getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount) {
+        nrf_wait_keyboard_idle(450);
+        if (EscPress) return result;
+    }
+
     uint8_t rpdValues[CHANNELS] = {0};
     lockSysI2CBus();
-    if (getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount || NRFradio.getPALevel() != RF24_PA_MAX) {
+    if (getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount ||
+        !NRFradio.isChipConnected() ||
+        NRFradio.getPALevel() != RF24_PA_MAX) {
         configureSpectrumRadio(true);
     } else {
         pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
@@ -110,6 +114,17 @@ String scanChannels(bool web) {
     }
 
     for (int i = 0; i < CHANNELS; i++) {
+        if (digitalRead(11) == LOW) {
+            NRFradio.stopListening();
+            NRFradio.powerDown();
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+            delayMicroseconds(2);
+            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+            delayMicroseconds(2);
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+            unlockSysI2CBus();
+            return result;
+        }
         NRFradio.setChannel(i);
         NRFradio.startListening();
         delayMicroseconds(160);
@@ -174,7 +189,14 @@ void nrf_spectrum() {
         unlockSysI2CBus();
 
         while (!check(EscPress)) {
-            if (AnyKeyPress && !EscPress) { AnyKeyPress = false; }
+            if (!EscPress) {
+                AnyKeyPress = false;
+                SelPress = false;
+                PrevPress = false;
+                NextPress = false;
+                UpPress = false;
+                DownPress = false;
+            }
             scanChannels();
             vTaskDelay(pdMS_TO_TICKS(1));
         }

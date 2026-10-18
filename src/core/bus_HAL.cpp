@@ -23,10 +23,15 @@ static SemaphoreHandle_t sysI2CMutex() {
 }
 
 static volatile uint32_t s_sysI2CPinsSwitchCount = 0;
+static volatile bool s_sysI2CKeyHeld = false;
 
 void notifySysI2CPinsSwitched() { s_sysI2CPinsSwitchCount++; }
 
 uint32_t getSysI2CPinsSwitchCount() { return s_sysI2CPinsSwitchCount; }
+
+void setSysI2CKeyHeld(bool held) { s_sysI2CKeyHeld = held; }
+
+bool isSysI2CKeyHeld() { return s_sysI2CKeyHeld; }
 
 void lockSysI2CBus() { xSemaphoreTake(sysI2CMutex(), portMAX_DELAY); }
 

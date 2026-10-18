@@ -28,6 +28,7 @@ extern SPIClass *NRFSPI;
 NRF24_MODE nrf_setMode();
 
 bool nrf_start(NRF24_MODE mode);
+void nrf_wait_keyboard_idle(unsigned long maxWaitMs = 450);
 
 void nrf_info();
 #endif

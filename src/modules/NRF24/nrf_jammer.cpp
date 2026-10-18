@@ -95,46 +95,51 @@ void nrf_jammer() {
         uint8_t shuffled_idx[124];
         uint32_t lastJammerI2cSwitchCount = 0;
         auto configureJammerRadio = [&](bool rebegin, uint8_t ch) {
-            pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-            pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-            delayMicroseconds(5);
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
+                pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
+                digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+                delayMicroseconds(2);
+                digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+                delayMicroseconds(2);
+                digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+                delayMicroseconds(5);
 
-            // Cleanly stop any active continuous wave (REUSE_TX_PL + CONT_WAVE)
-            // before reconfiguring or power-cycling the radio.
-            NRFradio.stopConstCarrier();
-            delayMicroseconds(500);
-            NRFradio.powerDown();
-            delay(2);
-
-            if (rebegin) {
-                NRFradio.begin(
-                    NRFSPI,
-                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
-                    rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
-                );
-            } else {
-                NRFradio.powerUp();
-                delayMicroseconds(200);
-            }
-            NRFradio.setPALevel(RF24_PA_MAX);
-            NRFradio.startConstCarrier(RF24_PA_MAX, ch);
-            NRFradio.setAddressWidth(5);
-            NRFradio.setPayloadSize(2);
-            if (!NRFradio.setDataRate(RF24_2MBPS)) {
-                Serial.println("Failed to set data rate to 2Mbps, trying 1Mbps");
-                if (!NRFradio.setDataRate(RF24_1MBPS)) {
-                    Serial.println("Failed to set data rate to 1Mbps, trying 250kbps");
-                    if (!NRFradio.setDataRate(RF24_250KBPS)) {
-                        Serial.println("Failed to set data rate to 250kbps, giving up");
+                if (rebegin || attempt > 0) {
+                    delay(5);
+                    if (!NRFradio.begin(
+                            NRFSPI,
+                            rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
+                            rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
+                        )) {
+                        delay(5);
+                        continue;
+                    }
+                } else {
+                    NRFradio.stopConstCarrier();
+                    delayMicroseconds(500);
+                    NRFradio.powerUp();
+                    delayMicroseconds(200);
+                }
+                NRFradio.setPALevel(RF24_PA_MAX);
+                NRFradio.startConstCarrier(RF24_PA_MAX, ch);
+                NRFradio.setAddressWidth(5);
+                NRFradio.setPayloadSize(2);
+                if (!NRFradio.setDataRate(RF24_2MBPS)) {
+                    Serial.println("Failed to set data rate to 2Mbps, trying 1Mbps");
+                    if (!NRFradio.setDataRate(RF24_1MBPS)) {
+                        Serial.println("Failed to set data rate to 1Mbps, trying 250kbps");
+                        if (!NRFradio.setDataRate(RF24_250KBPS)) {
+                            Serial.println("Failed to set data rate to 250kbps, giving up");
+                        }
                     }
                 }
+                if (NRFradio.isChipConnected() && NRFradio.getPALevel() == RF24_PA_MAX) {
+                    lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
+                    return;
+                }
+                delay(5);
             }
-            lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
         };
         if (CHECK_NRF_SPI(mode)) {
             lockSysI2CBus();
@@ -187,6 +192,7 @@ void nrf_jammer() {
                     NRFSerial.println(Mode);
                 }
                 if (CHECK_NRF_SPI(mode)) {
+                    nrf_wait_keyboard_idle(450);
                     lockSysI2CBus();
                     configureJammerRadio(
                         getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount,
@@ -215,6 +221,16 @@ void nrf_jammer() {
                 ch_idx = hopIndex;
             }
             if (CHECK_NRF_SPI(mode)) {
+                if (digitalRead(11) == LOW || isSysI2CKeyHeld() ||
+                    getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount) {
+                    lockSysI2CBus();
+                    pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
+                    pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
+                    NRFradio.stopConstCarrier();
+                    NRFradio.powerDown();
+                    unlockSysI2CBus();
+                    nrf_wait_keyboard_idle(450);
+                }
                 lockSysI2CBus();
                 if (getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount) {
                     configureJammerRadio(true, modes[modeIndex].channels[ch_idx]);
