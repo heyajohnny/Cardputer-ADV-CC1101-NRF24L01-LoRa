@@ -95,19 +95,21 @@ void nrf_jammer() {
         uint8_t shuffled_idx[124];
         uint32_t lastJammerI2cSwitchCount = 0;
         auto configureJammerRadio = [&](bool rebegin, uint8_t ch) {
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
             pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
             pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+            delayMicroseconds(2);
             digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+            delayMicroseconds(2);
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
             delayMicroseconds(5);
 
             // Cleanly stop any active continuous wave (REUSE_TX_PL + CONT_WAVE)
             // before reconfiguring or power-cycling the radio.
             NRFradio.stopConstCarrier();
+            delayMicroseconds(500);
             NRFradio.powerDown();
-            delay(5);
+            delay(2);
 
             if (rebegin) {
                 NRFradio.begin(
@@ -117,8 +119,10 @@ void nrf_jammer() {
                 );
             } else {
                 NRFradio.powerUp();
+                delayMicroseconds(200);
             }
-            NRFradio.setPALevel(RF24_PA_MAX, true);
+            NRFradio.setPALevel(RF24_PA_MAX);
+            NRFradio.startConstCarrier(RF24_PA_MAX, ch);
             NRFradio.setAddressWidth(5);
             NRFradio.setPayloadSize(2);
             if (!NRFradio.setDataRate(RF24_2MBPS)) {
@@ -130,7 +134,6 @@ void nrf_jammer() {
                     }
                 }
             }
-            NRFradio.startConstCarrier(RF24_PA_MAX, ch);
             lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
         };
         if (CHECK_NRF_SPI(mode)) {
@@ -185,7 +188,10 @@ void nrf_jammer() {
                 }
                 if (CHECK_NRF_SPI(mode)) {
                     lockSysI2CBus();
-                    configureJammerRadio(true, modes[modeIndex].channels[0]);
+                    configureJammerRadio(
+                        getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount,
+                        modes[modeIndex].channels[0]
+                    );
                     unlockSysI2CBus();
                 }
                 redraw = false;

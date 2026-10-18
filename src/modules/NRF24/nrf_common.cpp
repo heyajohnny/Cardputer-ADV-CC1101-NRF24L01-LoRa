@@ -75,13 +75,15 @@ bool nrf_start(NRF24_MODE mode) {
     lockSysI2CBus();
 
     // Always re-assert CE LOW and CS HIGH before begin() — these pins
-    // may have been left in an indeterminate state by the previous session.
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+    // may have been left in an indeterminate state by the previous session,
+    // especially after stopConstCarrier() which can leave CE HIGH internally.
     pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
     pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+    delayMicroseconds(2);
     digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+    delayMicroseconds(2);
+    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
     delay(5); // Let pins settle before SPI traffic
 
     NRFSPI =
@@ -90,25 +92,28 @@ bool nrf_start(NRF24_MODE mode) {
         Serial.println("No hardware SPI bus available for NRF24, falling back to default SPI");
         NRFSPI = &SPI;
     }
-    if (!sdcardMounted) {
-        NRFSPI->begin(
-            (int8_t)bruceConfigPins.NRF24_bus.sck,
-            (int8_t)bruceConfigPins.NRF24_bus.miso,
-            (int8_t)bruceConfigPins.NRF24_bus.mosi,
-            -1
-        );
-    }
+    NRFSPI->begin(
+        (int8_t)bruceConfigPins.NRF24_bus.sck,
+        (int8_t)bruceConfigPins.NRF24_bus.miso,
+        (int8_t)bruceConfigPins.NRF24_bus.mosi,
+        -1
+    );
     delay(10);
 
     for (int attempt = 0; attempt < 3; ++attempt) {
         NRFradio.stopConstCarrier();
+        delayMicroseconds(500);
         NRFradio.powerDown();
-        delay(5);
+        delay(2);
         if (NRFradio.begin(
                 NRFSPI,
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
             )) {
+            NRFradio.stopConstCarrier();
+            delayMicroseconds(500);
+            NRFradio.powerUp();
+            delayMicroseconds(200);
             NRFradio.setPALevel(RF24_PA_MAX, true);
             result = true;
             break;

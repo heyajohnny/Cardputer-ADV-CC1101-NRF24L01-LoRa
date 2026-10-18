@@ -1,7 +1,6 @@
 #include "core/bus_HAL.h"
 #include "core/powerSave.h"
 #include "core/utils.h"
-#include "modules/NRF24/nrf_common.h"
 #include <Adafruit_TCA8418.h>
 #include <Keyboard.h>
 #include <Wire.h>
@@ -38,76 +37,47 @@ char getKeyChar(uint8_t row, uint8_t col) {
 // Keep them as GPIO unless a keyboard or codec transaction needs I2C.
 void setI2cPinsTooutput() {
     Wire1.end();
-    digitalWrite(TCA8418_SCL_PIN, HIGH);
-    digitalWrite(TCA8418_SDA_PIN, LOW);
+    // Transition SDA (GPIO8 / NRF24 CE) LOW while SCL (GPIO9 / NRF24 CSN) is LOW
+    // so I2C slaves on GPIO8/9 do not see an I2C START condition (SDA falling while SCL HIGH).
     pinMode(TCA8418_SCL_PIN, OUTPUT);
     pinMode(TCA8418_SDA_PIN, OUTPUT);
-    digitalWrite(TCA8418_SCL_PIN, HIGH);
+    digitalWrite(TCA8418_SCL_PIN, LOW);
+    delayMicroseconds(2);
     digitalWrite(TCA8418_SDA_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TCA8418_SCL_PIN, HIGH);
     notifySysI2CPinsSwitched();
 }
 
 void setI2cPinsToI2c() {
-    // If NRF24 SPI has been initialized, cleanly power down the NRF24 (PWR_UP = 0)
-    // while GPIO8 (CE) and GPIO9 (CSN) are still GPIO outputs BEFORE switching
-    // GPIO8/GPIO9 to Wire1 I2C. When PWR_UP == 0, the NRF24 completely ignores CE (GPIO8),
-    // preventing Wire1 SDA/SCL traffic from triggering the NRF24 PLL/VCO/PA.
-    if (NRFSPI != nullptr) {
-        if (bruceConfigPins.CC1101_bus.cs != GPIO_NUM_NC) {
-            pinMode(bruceConfigPins.CC1101_bus.cs, OUTPUT);
-            digitalWrite(bruceConfigPins.CC1101_bus.cs, HIGH);
-        }
-#if !defined(LITE_VERSION)
-        if (bruceConfigPins.LoRa_bus.cs != GPIO_NUM_NC) {
-            pinMode(bruceConfigPins.LoRa_bus.cs, OUTPUT);
-            digitalWrite(bruceConfigPins.LoRa_bus.cs, HIGH);
-        }
-#endif
-        if (bruceConfigPins.SDCARD_bus.cs != GPIO_NUM_NC) {
-            pinMode(bruceConfigPins.SDCARD_bus.cs, OUTPUT);
-            digitalWrite(bruceConfigPins.SDCARD_bus.cs, HIGH);
-        }
-        digitalWrite(TCA8418_SDA_PIN, LOW);
-        digitalWrite(TCA8418_SCL_PIN, HIGH);
-        pinMode(TCA8418_SDA_PIN, OUTPUT);
-        pinMode(TCA8418_SCL_PIN, OUTPUT);
-        digitalWrite(TCA8418_SDA_PIN, LOW);
-        digitalWrite(TCA8418_SCL_PIN, HIGH);
-        delayMicroseconds(5);
-        NRFradio.stopConstCarrier();
-        NRFradio.powerDown();
-        delayMicroseconds(5);
-    }
-
     // Check in open-drain pull-up mode if any I2C slave on GPIO8/9 (TCA8418, ES8311, BMI270)
-    // is holding SDA (GPIO8) LOW due to prior NRF24 activity. Only clock out 9 SCL pulses
-    // + a proper open-drain STOP condition if SDA is actually stuck LOW.
+    // is holding SDA (GPIO8) LOW due to prior NRF24 activity. Also always send an open-drain
+    // I2C STOP condition (with 9 NACK clocks if SDA is LOW) to reset any partial I2C byte
+    // state on the slaves caused by NRF24 CE/CSN toggling on GPIO8/9.
     pinMode(TCA8418_SDA_PIN, INPUT_PULLUP);
     pinMode(TCA8418_SCL_PIN, INPUT_PULLUP);
     delayMicroseconds(5);
-    if (digitalRead(TCA8418_SDA_PIN) == LOW) {
-        digitalWrite(TCA8418_SDA_PIN, HIGH);
-        digitalWrite(TCA8418_SCL_PIN, HIGH);
-        pinMode(TCA8418_SDA_PIN, OUTPUT_OPEN_DRAIN);
-        pinMode(TCA8418_SCL_PIN, OUTPUT_OPEN_DRAIN);
-        delayMicroseconds(5);
-        for (int i = 0; i < 9 && digitalRead(TCA8418_SDA_PIN) == LOW; ++i) {
-            digitalWrite(TCA8418_SCL_PIN, LOW);
-            delayMicroseconds(5);
-            digitalWrite(TCA8418_SCL_PIN, HIGH);
-            delayMicroseconds(5);
-        }
-        // Generate a proper I2C STOP condition: pull SCL LOW first, then SDA LOW,
-        // then release SCL HIGH, then release SDA HIGH.
+    digitalWrite(TCA8418_SDA_PIN, HIGH);
+    digitalWrite(TCA8418_SCL_PIN, HIGH);
+    pinMode(TCA8418_SDA_PIN, OUTPUT_OPEN_DRAIN);
+    pinMode(TCA8418_SCL_PIN, OUTPUT_OPEN_DRAIN);
+    delayMicroseconds(5);
+    for (int i = 0; i < 9 && digitalRead(TCA8418_SDA_PIN) == LOW; ++i) {
         digitalWrite(TCA8418_SCL_PIN, LOW);
         delayMicroseconds(5);
-        digitalWrite(TCA8418_SDA_PIN, LOW);
-        delayMicroseconds(5);
         digitalWrite(TCA8418_SCL_PIN, HIGH);
         delayMicroseconds(5);
-        digitalWrite(TCA8418_SDA_PIN, HIGH);
-        delayMicroseconds(5);
     }
+    // Generate a proper open-drain I2C STOP condition: pull SCL LOW first, then SDA LOW,
+    // then release SCL HIGH, then release SDA HIGH.
+    digitalWrite(TCA8418_SCL_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(TCA8418_SDA_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(TCA8418_SCL_PIN, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(TCA8418_SDA_PIN, HIGH);
+    delayMicroseconds(5);
 
     Wire1.begin(TCA8418_SDA_PIN, TCA8418_SCL_PIN);
     delay(2);
