@@ -38,16 +38,12 @@ char getKeyChar(uint8_t row, uint8_t col) {
 // Keep them as GPIO unless a keyboard or codec transaction needs I2C.
 void setI2cPinsTooutput() {
     Wire1.end();
-    // Transition SDA (GPIO8 / NRF24 CE) LOW while SCL (GPIO9 / NRF24 CSN) is LOW
-    // so I2C slaves on GPIO8/9 (TCA8418, ES8311, BMI270) do not see an I2C START
-    // condition (SDA falling while SCL HIGH).
+    digitalWrite(TCA8418_SCL_PIN, HIGH);
+    digitalWrite(TCA8418_SDA_PIN, LOW);
     pinMode(TCA8418_SCL_PIN, OUTPUT);
     pinMode(TCA8418_SDA_PIN, OUTPUT);
-    digitalWrite(TCA8418_SCL_PIN, LOW);
-    delayMicroseconds(2);
-    digitalWrite(TCA8418_SDA_PIN, LOW);
-    delayMicroseconds(2);
     digitalWrite(TCA8418_SCL_PIN, HIGH);
+    digitalWrite(TCA8418_SDA_PIN, LOW);
     notifySysI2CPinsSwitched();
 }
 
@@ -78,6 +74,7 @@ void setI2cPinsToI2c() {
         digitalWrite(TCA8418_SDA_PIN, LOW);
         digitalWrite(TCA8418_SCL_PIN, HIGH);
         delayMicroseconds(5);
+        NRFradio.stopConstCarrier();
         NRFradio.powerDown();
         delayMicroseconds(5);
     }
@@ -461,6 +458,10 @@ void InputHandler(void) {
                     }
                 }
 
+                // Clear GPIO interrupt status registers before clearing INT_STAT
+                tca.readRegister(TCA8418_REG_GPIO_INT_STAT_1);
+                tca.readRegister(TCA8418_REG_GPIO_INT_STAT_2);
+                tca.readRegister(TCA8418_REG_GPIO_INT_STAT_3);
                 tca.writeRegister(TCA8418_REG_INT_STAT, 0x1F);
                 int intstat = tca.readRegister(TCA8418_REG_INT_STAT);
                 if ((intstat & 0x1F) == 0 && digitalRead(11) == HIGH) {
