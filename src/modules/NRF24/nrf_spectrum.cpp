@@ -130,7 +130,7 @@ String scanChannels(bool web) {
         // so the NRF24 ignores CE (GPIO8/SDA) during Wire1 I2C traffic.
         NRFradio.powerDown();
         nrfSafeCeLow();
-        lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+        lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
         unlockSysI2CBus();
         return result;
     }

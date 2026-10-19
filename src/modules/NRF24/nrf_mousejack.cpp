@@ -744,7 +744,7 @@ static bool mj_scan() {
                 nrfSafeCeLow();
                 NRFradio.powerDown();
                 nrfSafeCeLow();
-                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
                 unlockSysI2CBus();
                 continue;
             }
@@ -772,7 +772,7 @@ static bool mj_scan() {
             if (digitalRead(11) == LOW) {
                 NRFradio.powerDown();
                 nrfSafeCeLow();
-                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
             }
             unlockSysI2CBus();
 

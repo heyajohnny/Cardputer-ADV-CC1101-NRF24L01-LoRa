@@ -42,7 +42,7 @@ static inline void nrfSafeCeLow() {
 }
 
 void nrfPrepareSharedPins(bool afterI2c);
-void nrfDrainPendingKeyTraffic(bool stopOnEsc);
+void nrfDrainPendingKeyTraffic(bool stopOnEsc, bool stopOnNavKeys = false);
 
 void nrf_info();
 #endif

@@ -167,11 +167,13 @@ void nrfPrepareSharedPins(bool afterI2c) {
     delay(2);
 }
 
-void nrfDrainPendingKeyTraffic(bool stopOnEsc) {
+void nrfDrainPendingKeyTraffic(bool stopOnEsc, bool stopOnNavKeys) {
     unsigned long waitStart = millis();
     while (millis() - waitStart < 350) {
         if (stopOnEsc && EscPress) break;
-        if (stopOnEsc && AnyKeyPress && !EscPress) {
+        if (stopOnNavKeys && (NextPress || PrevPress || SelPress)) break;
+        if (stopOnEsc && AnyKeyPress && !EscPress &&
+            (!stopOnNavKeys || (!NextPress && !PrevPress && !SelPress))) {
             // Clear AnyKeyPress so taskInputHandler is not throttled by its 75 ms gate
             // and can immediately service the key-release interrupt on GPIO11.
             AnyKeyPress = false;
@@ -179,7 +181,9 @@ void nrfDrainPendingKeyTraffic(bool stopOnEsc) {
         uint32_t switchSnap = getSysI2CPinsSwitchCount();
         vTaskDelay(pdMS_TO_TICKS(20));
         if (stopOnEsc && EscPress) break;
-        if (stopOnEsc && AnyKeyPress && !EscPress) {
+        if (stopOnNavKeys && (NextPress || PrevPress || SelPress)) break;
+        if (stopOnEsc && AnyKeyPress && !EscPress &&
+            (!stopOnNavKeys || (!NextPress && !PrevPress && !SelPress))) {
             AnyKeyPress = false;
         }
         if (digitalRead(11) == HIGH && (!AnyKeyPress || (stopOnEsc && EscPress)) && !SelPress) {
