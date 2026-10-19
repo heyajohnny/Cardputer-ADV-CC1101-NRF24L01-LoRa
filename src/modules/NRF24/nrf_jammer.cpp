@@ -95,8 +95,18 @@ void nrf_jammer() {
         bool jammerRadioActive = false;
         bool waitForKeyRelease = false;
         uint32_t keyDownSwitchCount = 0;
+        int16_t statusLineY = -1;
+        int displayedStatusActive = -1;
         uint8_t shuffled_idx[124];
         uint32_t lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
+        auto updateStatusDisplay = [&](bool active) {
+            if (statusLineY < 0 || displayedStatusActive == (int)active) return;
+            displayedStatusActive = (int)active;
+            tft.setTextSize(FP);
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+            tft.setCursor(BORDER_PAD_X, statusLineY);
+            tft.print(active ? "STATUS : ACTIVE       " : "STATUS : INACTIVE     ");
+        };
         auto stopJammerRadioLocked = [&]() {
             nrfSafeCeLow();
             NRFradio.stopConstCarrier();
@@ -164,11 +174,11 @@ void nrf_jammer() {
                 }
                 digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
                 // Verify NRF_CONFIG (0x00) has PWR_UP=1, PRIM_RX=0 (0x02) and
-                // RF_SETUP (0x06) has CONT_WAVE=1, PLL_LOCK=1, PA_MAX (0x96).
+                // RF_SETUP (0x06) has CONT_WAVE=1, bit6=0, PLL_LOCK=1, PA_MAX (0x96).
                 if (dataRateOk &&
                     NRFradio.getChannel() == ch &&
                     (nrfReadRegister(0x00) & 0x03) == 0x02 &&
-                    (nrfReadRegister(0x06) & 0x96) == 0x96) {
+                    (nrfReadRegister(0x06) & 0xD6) == 0x96) {
                     lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
                     jammerRadioActive = true;
                     return;
@@ -220,7 +230,10 @@ void nrf_jammer() {
 
                 drawMainBorderWithTitle("NRF JAMMER", false);
                 printSubtitle("NRF function Jammer");
-                padprintln("STATUS : " + String(NRFOnline) + " ACTIVE");
+                statusLineY = tft.getCursorY();
+                bool isCurrentlyActive = CHECK_NRF_SPI(mode) ? jammerRadioActive : (OnX != 0 && NRFOnline > 0);
+                displayedStatusActive = (int)isCurrentlyActive;
+                padprintln(isCurrentlyActive ? "STATUS : ACTIVE       " : "STATUS : INACTIVE     ");
                 String _modeName = String(modes[modeIndex].name) + "            ";
                 _modeName = _modeName.substring(0, 13);
                 padprintln("MODE : " + _modeName);
@@ -258,6 +271,7 @@ void nrf_jammer() {
             }
             if (CHECK_NRF_SPI(mode)) {
                 if (waitForKeyRelease) {
+                    updateStatusDisplay(false);
                     // Wait for the user to release the navigation key (which triggers a second
                     // TCA8418 I2C transaction on GPIO8/GPIO9) before starting the carrier,
                     // while breaking immediately if another navigation key or Esc is pressed.
@@ -281,6 +295,7 @@ void nrf_jammer() {
                         stopJammerRadioLocked();
                         unlockSysI2CBus();
                     }
+                    updateStatusDisplay(false);
                     nrfDrainPendingKeyTraffic(true, true);
                 }
 
@@ -289,12 +304,15 @@ void nrf_jammer() {
                     if (digitalRead(11) == LOW) {
                         stopJammerRadioLocked();
                         unlockSysI2CBus();
+                        updateStatusDisplay(false);
                     } else {
                         if (!jammerRadioActive ||
                             getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount ||
                             (hopIndex == 0 &&
                              ((nrfReadRegister(0x00) & 0x03) != 0x02 ||
-                              (nrfReadRegister(0x06) & 0x96) != 0x96))) {
+                              (nrfReadRegister(0x06) & 0xD6) != 0x96))) {
+                            jammerRadioActive = false;
+                            updateStatusDisplay(false);
                             configureJammerRadio(true, modes[modeIndex].channels[ch_idx]);
                         } else {
                             digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
@@ -304,6 +322,7 @@ void nrf_jammer() {
                             stopJammerRadioLocked();
                         }
                         unlockSysI2CBus();
+                        updateStatusDisplay(jammerRadioActive);
                     }
                 }
             }
