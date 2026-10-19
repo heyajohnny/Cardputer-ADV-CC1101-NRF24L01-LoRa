@@ -98,7 +98,7 @@ void nrf_jammer() {
             for (int attempt = 0; attempt < 3; ++attempt) {
                 nrfPrepareSharedPins(rebegin || attempt > 0);
                 if (rebegin || attempt > 0) {
-                    delay(5);
+                    delay(10);
                     NRFSPI->begin(
                         (int8_t)bruceConfigPins.NRF24_bus.sck,
                         (int8_t)bruceConfigPins.NRF24_bus.miso,

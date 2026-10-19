@@ -37,15 +37,32 @@ char getKeyChar(uint8_t row, uint8_t col) {
 // Keep them as GPIO unless a keyboard or codec transaction needs I2C.
 void setI2cPinsTooutput() {
     Wire1.end();
-    // Transition SDA (GPIO8 / NRF24 CE) LOW while SCL (GPIO9 / NRF24 CSN) is LOW
-    // so I2C slaves on GPIO8/9 do not see an I2C START condition (SDA falling while SCL HIGH).
+    // The ESP32-S3 I2C peripheral releases GPIO8/GPIO9 only after the driver
+    // has torn down. A few microseconds is not enough; until then digitalWrite
+    // does not own the pins and the next NRF24 CE edge looks like I2C START.
+    delay(10);
+
+    // Drive SCL low before SDA can fall. pinMode(OUTPUT) on the ESP32 drives
+    // the pin low immediately, so SCL must be an output first.
     pinMode(TCA8418_SCL_PIN, OUTPUT);
-    pinMode(TCA8418_SDA_PIN, OUTPUT);
     digitalWrite(TCA8418_SCL_PIN, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(50);
+    pinMode(TCA8418_SDA_PIN, OUTPUT);
     digitalWrite(TCA8418_SDA_PIN, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(50);
+
+    // Return the bus to idle (both lines high) so TCA8418/ES8311/BMI270 leave
+    // any partial byte, then park NRF24 CE low while CSN is low.
+    digitalWrite(TCA8418_SDA_PIN, HIGH);
+    delayMicroseconds(50);
     digitalWrite(TCA8418_SCL_PIN, HIGH);
+    delayMicroseconds(100);
+    digitalWrite(TCA8418_SCL_PIN, LOW);
+    delayMicroseconds(50);
+    digitalWrite(TCA8418_SDA_PIN, LOW);
+    delayMicroseconds(50);
+    digitalWrite(TCA8418_SCL_PIN, HIGH);
+    delay(1);
     notifySysI2CPinsSwitched();
 }
 
@@ -56,31 +73,33 @@ void setI2cPinsToI2c() {
     // state on the slaves caused by NRF24 CE/CSN toggling on GPIO8/9.
     pinMode(TCA8418_SDA_PIN, INPUT_PULLUP);
     pinMode(TCA8418_SCL_PIN, INPUT_PULLUP);
-    delayMicroseconds(5);
+    delayMicroseconds(50);
     digitalWrite(TCA8418_SDA_PIN, HIGH);
     digitalWrite(TCA8418_SCL_PIN, HIGH);
     pinMode(TCA8418_SDA_PIN, OUTPUT_OPEN_DRAIN);
     pinMode(TCA8418_SCL_PIN, OUTPUT_OPEN_DRAIN);
-    delayMicroseconds(5);
-    for (int i = 0; i < 9 && digitalRead(TCA8418_SDA_PIN) == LOW; ++i) {
+    delay(1);
+    // Two full bytes of clock, slow enough for a slave that was left mid-byte
+    // by NRF24 CE/CSN edges on these same pins.
+    for (int i = 0; i < 18 && digitalRead(TCA8418_SDA_PIN) == LOW; ++i) {
         digitalWrite(TCA8418_SCL_PIN, LOW);
-        delayMicroseconds(5);
+        delayMicroseconds(50);
         digitalWrite(TCA8418_SCL_PIN, HIGH);
-        delayMicroseconds(5);
+        delayMicroseconds(50);
     }
     // Generate a proper open-drain I2C STOP condition: pull SCL LOW first, then SDA LOW,
     // then release SCL HIGH, then release SDA HIGH.
     digitalWrite(TCA8418_SCL_PIN, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(50);
     digitalWrite(TCA8418_SDA_PIN, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(50);
     digitalWrite(TCA8418_SCL_PIN, HIGH);
-    delayMicroseconds(5);
+    delayMicroseconds(50);
     digitalWrite(TCA8418_SDA_PIN, HIGH);
-    delayMicroseconds(5);
+    delayMicroseconds(50);
 
     Wire1.begin(TCA8418_SDA_PIN, TCA8418_SCL_PIN);
-    delay(2);
+    delay(5);
 }
 
 int handleSpecialKeys(uint8_t row, uint8_t col, bool pressed) {

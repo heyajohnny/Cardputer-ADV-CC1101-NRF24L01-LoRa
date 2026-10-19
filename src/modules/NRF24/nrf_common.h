@@ -34,11 +34,11 @@ bool nrf_start(NRF24_MODE mode);
 // condition on the shared GPIO8/GPIO9 keyboard/sensor I2C bus).
 static inline void nrfSafeCeLow() {
     digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(50);
     digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(50);
     digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-    delayMicroseconds(2);
+    delayMicroseconds(50);
 }
 
 void nrfPrepareSharedPins(bool afterI2c);

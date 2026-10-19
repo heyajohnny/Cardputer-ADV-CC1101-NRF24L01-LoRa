@@ -69,7 +69,7 @@ bool nrf_start(NRF24_MODE mode) {
 
     // Always recover GPIO8/GPIO9 from I2C and re-assert CE LOW and CS HIGH before begin().
     nrfPrepareSharedPins(true);
-    delay(5); // Let pins settle before SPI traffic
+    delay(10); // Let GPIO8/GPIO9 leave the I2C peripheral before SPI traffic
 
     NRFSPI =
         acquireSPIBus(bruceConfigPins.NRF24_bus.sck, bruceConfigPins.NRF24_bus.miso, bruceConfigPins.NRF24_bus.mosi);
@@ -138,12 +138,12 @@ void nrfPrepareSharedPins(bool afterI2c) {
         pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
         digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
         pinMode(bruceConfigPins.NRF24_bus.io0, INPUT_PULLUP);
-        delayMicroseconds(5);
-        for (int clk = 0; clk < 9 && digitalRead(bruceConfigPins.NRF24_bus.io0) == LOW; ++clk) {
+        delay(1);
+        for (int clk = 0; clk < 18 && digitalRead(bruceConfigPins.NRF24_bus.io0) == LOW; ++clk) {
             digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-            delayMicroseconds(5);
+            delayMicroseconds(50);
             digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-            delayMicroseconds(5);
+            delayMicroseconds(50);
         }
     }
 
@@ -155,16 +155,16 @@ void nrfPrepareSharedPins(bool afterI2c) {
         // to terminate any spurious I2C START condition created when setI2cPinsTooutput()
         // switched GPIO8/GPIO9 back from Wire1.
         digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-        delayMicroseconds(2);
+        delayMicroseconds(50);
         digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-        delayMicroseconds(3);
+        delayMicroseconds(50);
         digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
-        delayMicroseconds(3);
+        delayMicroseconds(50);
     }
 
     // Set CE (GPIO8/SDA) LOW while CSN (GPIO9/SCL) is LOW so no I2C START condition is generated.
     nrfSafeCeLow();
-    delayMicroseconds(5);
+    delay(2);
 }
 
 void nrfDrainPendingKeyTraffic(bool stopOnEsc) {

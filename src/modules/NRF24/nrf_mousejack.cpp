@@ -655,7 +655,7 @@ static bool mj_scan() {
         for (int attempt = 0; attempt < 3; ++attempt) {
             nrfPrepareSharedPins(rebegin || attempt > 0);
             if (rebegin || attempt > 0) {
-                delay(5);
+                delay(10);
                 NRFSPI->begin(
                     (int8_t)bruceConfigPins.NRF24_bus.sck,
                     (int8_t)bruceConfigPins.NRF24_bus.miso,
@@ -740,6 +740,14 @@ static bool mj_scan() {
             }
 
             lockSysI2CBus();
+            if (digitalRead(11) == LOW) {
+                nrfSafeCeLow();
+                NRFradio.powerDown();
+                nrfSafeCeLow();
+                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+                unlockSysI2CBus();
+                continue;
+            }
             if (getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount ||
                 NRFradio.getPALevel() != RF24_PA_MAX ||
                 NRFradio.getCRCLength() != RF24_CRC_DISABLED) {

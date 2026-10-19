@@ -13,7 +13,7 @@ static void configureSpectrumRadio(bool rebegin) {
         nrfPrepareSharedPins(rebegin || attempt > 0);
 
         if (rebegin || attempt > 0) {
-            delay(5);
+            delay(10);
             NRFSPI->begin(
                 (int8_t)bruceConfigPins.NRF24_bus.sck,
                 (int8_t)bruceConfigPins.NRF24_bus.miso,
@@ -89,6 +89,7 @@ String scanChannels(bool web) {
     }
 
     uint8_t rpdValues[CHANNELS] = {0};
+    bool keyboardPending = false;
     lockSysI2CBus();
     if (getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount ||
         NRFradio.getPALevel() != RF24_PA_MAX ||
@@ -99,9 +100,16 @@ String scanChannels(bool web) {
     }
 
     for (int i = 0; i < CHANNELS; i++) {
+        // GPIO11 low means the keyboard controller wants GPIO8/GPIO9 back.
+        // Stop the sweep immediately so the rest of the channels do not clock
+        // a partial I2C byte into TCA8418/ES8311/BMI270.
+        if (digitalRead(11) == LOW) {
+            keyboardPending = true;
+            break;
+        }
         NRFradio.setChannel(i);
         NRFradio.startListening();
-        delayMicroseconds(160);
+        delayMicroseconds(400);
         bool foundSignal = NRFradio.testRPD();
         nrfSafeCeLow();
         NRFradio.stopListening();
@@ -117,12 +125,14 @@ String scanChannels(bool web) {
 
     // Leave CE LOW while CSN is LOW so no I2C START condition is left on GPIO8/9
     nrfSafeCeLow();
-    if (digitalRead(11) == LOW) {
+    if (keyboardPending || digitalRead(11) == LOW) {
         // A keyboard interrupt is pending; power down the radio before releasing the bus
         // so the NRF24 ignores CE (GPIO8/SDA) during Wire1 I2C traffic.
         NRFradio.powerDown();
         nrfSafeCeLow();
         lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+        unlockSysI2CBus();
+        return result;
     }
     unlockSysI2CBus();
 
