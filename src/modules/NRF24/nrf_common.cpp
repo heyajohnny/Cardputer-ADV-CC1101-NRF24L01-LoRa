@@ -88,6 +88,7 @@ bool nrf_start(NRF24_MODE mode) {
     for (int attempt = 0; attempt < 3; ++attempt) {
         nrfSafeCeLow();
         NRFradio.stopConstCarrier();
+        NRFradio.flush_tx();
         delayMicroseconds(500);
         NRFradio.powerDown();
         delay(2);
@@ -98,6 +99,7 @@ bool nrf_start(NRF24_MODE mode) {
             )) {
             nrfSafeCeLow();
             NRFradio.stopConstCarrier();
+            NRFradio.flush_tx();
             delayMicroseconds(500);
             NRFradio.powerUp();
             delayMicroseconds(200);
@@ -188,7 +190,10 @@ void nrfDrainPendingKeyTraffic(bool stopOnEsc, bool stopOnNavKeys) {
         }
         if (digitalRead(11) == HIGH && (!AnyKeyPress || (stopOnEsc && EscPress)) && !SelPress) {
             vTaskDelay(pdMS_TO_TICKS(60));
-            if (digitalRead(11) == HIGH && getSysI2CPinsSwitchCount() == switchSnap) {
+            lockSysI2CBus();
+            bool settled = (digitalRead(11) == HIGH && getSysI2CPinsSwitchCount() == switchSnap);
+            unlockSysI2CBus();
+            if (settled) {
                 break;
             }
         }

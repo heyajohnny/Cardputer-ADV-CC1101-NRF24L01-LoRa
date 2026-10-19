@@ -41,6 +41,14 @@ static inline void nrfSafeCeLow() {
     delayMicroseconds(50);
 }
 
+struct NrfRegAccessor : public RF24 {
+    using RF24::read_register;
+};
+
+static inline uint8_t nrfReadRegister(uint8_t reg) {
+    return static_cast<NrfRegAccessor &>(NRFradio).read_register(reg);
+}
+
 void nrfPrepareSharedPins(bool afterI2c);
 void nrfDrainPendingKeyTraffic(bool stopOnEsc, bool stopOnNavKeys = false);
 

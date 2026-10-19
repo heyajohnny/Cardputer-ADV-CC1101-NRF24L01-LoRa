@@ -93,8 +93,19 @@ void nrf_jammer() {
         bool redraw = true;
         bool need_reshuffle = true;
         bool jammerRadioActive = false;
+        bool waitForKeyRelease = false;
+        uint32_t keyDownSwitchCount = 0;
         uint8_t shuffled_idx[124];
         uint32_t lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
+        auto stopJammerRadioLocked = [&]() {
+            nrfSafeCeLow();
+            NRFradio.stopConstCarrier();
+            NRFradio.flush_tx();
+            NRFradio.powerDown();
+            nrfSafeCeLow();
+            jammerRadioActive = false;
+            lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
+        };
         auto configureJammerRadio = [&](bool rebegin, uint8_t ch) {
             jammerRadioActive = false;
             for (int attempt = 0; attempt < 3; ++attempt) {
@@ -114,6 +125,7 @@ void nrf_jammer() {
                 // before reconfiguring or power-cycling the radio.
                 nrfSafeCeLow();
                 NRFradio.stopConstCarrier();
+                NRFradio.flush_tx();
                 delayMicroseconds(500);
                 NRFradio.powerDown();
                 delay(2);
@@ -127,12 +139,13 @@ void nrf_jammer() {
                         delay(10);
                         continue;
                     }
+                } else {
+                    NRFradio.powerUp();
+                    delayMicroseconds(200);
                 }
-                nrfSafeCeLow();
-                NRFradio.stopConstCarrier();
-                delayMicroseconds(500);
-                NRFradio.powerUp();
-                delayMicroseconds(200);
+                NRFradio.setAutoAck(false);
+                NRFradio.setRetries(0, 0);
+                NRFradio.disableCRC();
                 NRFradio.setPALevel(RF24_PA_MAX);
                 NRFradio.startConstCarrier(RF24_PA_MAX, ch);
                 NRFradio.setAddressWidth(5);
@@ -149,9 +162,13 @@ void nrf_jammer() {
                         }
                     }
                 }
+                digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
+                // Verify NRF_CONFIG (0x00) has PWR_UP=1, PRIM_RX=0 (0x02) and
+                // RF_SETUP (0x06) has CONT_WAVE=1, PLL_LOCK=1, PA_MAX (0x96).
                 if (dataRateOk &&
                     NRFradio.getChannel() == ch &&
-                    NRFradio.getPALevel() == RF24_PA_MAX) {
+                    (nrfReadRegister(0x00) & 0x03) == 0x02 &&
+                    (nrfReadRegister(0x06) & 0x96) == 0x96) {
                     lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
                     jammerRadioActive = true;
                     return;
@@ -164,10 +181,7 @@ void nrf_jammer() {
             // 50 ms so any trailing Enter key-release interrupt on GPIO11 is serviced
             // by InputHandler without colliding with an active continuous carrier.
             lockSysI2CBus();
-            nrfSafeCeLow();
-            NRFradio.stopConstCarrier();
-            NRFradio.powerDown();
-            nrfSafeCeLow();
+            stopJammerRadioLocked();
             unlockSysI2CBus();
         }
 
@@ -200,12 +214,7 @@ void nrf_jammer() {
             if (redraw) {
                 if (CHECK_NRF_SPI(mode) && jammerRadioActive) {
                     lockSysI2CBus();
-                    nrfSafeCeLow();
-                    NRFradio.stopConstCarrier();
-                    NRFradio.powerDown();
-                    nrfSafeCeLow();
-                    jammerRadioActive = false;
-                    lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
+                    stopJammerRadioLocked();
                     unlockSysI2CBus();
                 }
 
@@ -226,13 +235,6 @@ void nrf_jammer() {
                     String Mode = modes[modeIndex].name;
                     Mode.replace(" ", "");
                     NRFSerial.println(Mode);
-                }
-                if (CHECK_NRF_SPI(mode)) {
-                    nrfDrainPendingKeyTraffic(true, true);
-                    if (check(EscPress)) break;
-                    lockSysI2CBus();
-                    configureJammerRadio(true, modes[modeIndex].channels[0]);
-                    unlockSysI2CBus();
                 }
                 redraw = false;
             }
@@ -255,18 +257,28 @@ void nrf_jammer() {
                 ch_idx = hopIndex;
             }
             if (CHECK_NRF_SPI(mode)) {
+                if (waitForKeyRelease) {
+                    // Wait for the user to release the navigation key (which triggers a second
+                    // TCA8418 I2C transaction on GPIO8/GPIO9) before starting the carrier,
+                    // while breaking immediately if another navigation key or Esc is pressed.
+                    unsigned long releaseWaitStart = millis();
+                    while (millis() - releaseWaitStart < 250) {
+                        if (EscPress || NextPress || PrevPress || SelPress) break;
+                        if (getSysI2CPinsSwitchCount() != keyDownSwitchCount && digitalRead(11) == HIGH) {
+                            break;
+                        }
+                        vTaskDelay(pdMS_TO_TICKS(10));
+                    }
+                    waitForKeyRelease = false;
+                }
+
                 if (digitalRead(11) == LOW ||
                     !jammerRadioActive ||
                     getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount ||
                     (AnyKeyPress && !EscPress && !NextPress && !PrevPress && !SelPress)) {
                     if (jammerRadioActive) {
                         lockSysI2CBus();
-                        nrfSafeCeLow();
-                        NRFradio.stopConstCarrier();
-                        NRFradio.powerDown();
-                        nrfSafeCeLow();
-                        jammerRadioActive = false;
-                        lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
+                        stopJammerRadioLocked();
                         unlockSysI2CBus();
                     }
                     nrfDrainPendingKeyTraffic(true, true);
@@ -275,18 +287,21 @@ void nrf_jammer() {
                 if (!NextPress && !PrevPress && !SelPress && !EscPress) {
                     lockSysI2CBus();
                     if (digitalRead(11) == LOW) {
-                        nrfSafeCeLow();
-                        NRFradio.stopConstCarrier();
-                        NRFradio.powerDown();
-                        nrfSafeCeLow();
-                        jammerRadioActive = false;
-                        lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
+                        stopJammerRadioLocked();
                         unlockSysI2CBus();
                     } else {
-                        if (!jammerRadioActive || getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount) {
+                        if (!jammerRadioActive ||
+                            getSysI2CPinsSwitchCount() != lastJammerI2cSwitchCount ||
+                            (hopIndex == 0 &&
+                             ((nrfReadRegister(0x00) & 0x03) != 0x02 ||
+                              (nrfReadRegister(0x06) & 0x96) != 0x96))) {
                             configureJammerRadio(true, modes[modeIndex].channels[ch_idx]);
                         } else {
+                            digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
                             NRFradio.setChannel(modes[modeIndex].channels[ch_idx]);
+                        }
+                        if (digitalRead(11) == LOW) {
+                            stopJammerRadioLocked();
                         }
                         unlockSysI2CBus();
                     }
@@ -299,6 +314,8 @@ void nrf_jammer() {
                 hopIndex = 0;
                 need_reshuffle = true;
                 redraw = true;
+                waitForKeyRelease = true;
+                keyDownSwitchCount = getSysI2CPinsSwitchCount();
             }
             if (check(PrevPress)) {
                 modeIndex--;
@@ -306,6 +323,8 @@ void nrf_jammer() {
                 hopIndex = 0;
                 need_reshuffle = true;
                 redraw = true;
+                waitForKeyRelease = true;
+                keyDownSwitchCount = getSysI2CPinsSwitchCount();
             }
             if (check(EscPress)) break;
             if (check(SelPress)) {
@@ -314,6 +333,8 @@ void nrf_jammer() {
                 hopIndex = 0;
                 need_reshuffle = true;
                 redraw = true;
+                waitForKeyRelease = true;
+                keyDownSwitchCount = getSysI2CPinsSwitchCount();
             }
             if (AnyKeyPress && !EscPress && !NextPress && !PrevPress && !SelPress) {
                 AnyKeyPress = false;
@@ -323,10 +344,7 @@ void nrf_jammer() {
         if (CHECK_NRF_SPI(mode)) {
             lockSysI2CBus();
             nrfPrepareSharedPins(false);
-            nrfSafeCeLow();
-            NRFradio.stopConstCarrier();
-            NRFradio.powerDown();
-            nrfSafeCeLow();
+            stopJammerRadioLocked();
             unlockSysI2CBus();
         }
         if ((CHECK_NRF_UART(mode)) || (CHECK_NRF_BOTH(mode))) { NRFSerial.println("OFF"); }
