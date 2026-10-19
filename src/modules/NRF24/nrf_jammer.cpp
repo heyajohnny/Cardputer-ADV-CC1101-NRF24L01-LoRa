@@ -93,19 +93,67 @@ void nrf_jammer() {
         bool redraw = true;
         bool need_reshuffle = true;
         bool jammerRadioActive = false;
+        bool hwTxVerified = false;
         bool waitForKeyRelease = false;
         uint32_t keyDownSwitchCount = 0;
         int16_t statusLineY = -1;
         int displayedStatusActive = -1;
+        uint8_t lastVerifiedCh = 0;
+        uint32_t verifiedHops = 0;
+        unsigned long lastTelemetryMs = millis();
+        uint8_t txChSeen[125] = {0};
+        uint8_t drawnColState[125] = {0};
         uint8_t shuffled_idx[124];
         uint32_t lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
-        auto updateStatusDisplay = [&](bool active) {
-            if (statusLineY < 0 || displayedStatusActive == (int)active) return;
-            displayedStatusActive = (int)active;
+        const int16_t barBoxX = 55;
+        const int16_t barBoxY = 110;
+        const int16_t barBoxW = 127;
+        const int16_t barBoxH = 16;
+        const int16_t barInnerTop = barBoxY + 1;
+        const int16_t barMaxH = barBoxH - 2; // 14 px
+        auto drawTxBarFrame = [&]() {
             tft.setTextSize(FP);
             tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-            tft.setCursor(BORDER_PAD_X, statusLineY);
-            tft.print(active ? "STATUS : ACTIVE       " : "STATUS : INACTIVE     ");
+            tft.drawString("2.40G", 10, barBoxY + 4);
+            tft.drawString("2.52G", 190, barBoxY + 4);
+            tft.drawRect(barBoxX, barBoxY, barBoxW, barBoxH, TFT_DARKGREY);
+            memset(drawnColState, 0, sizeof(drawnColState));
+        };
+        auto updateStatusDisplay = [&](bool active, bool force = false) {
+            if (statusLineY < 0) return;
+            unsigned long now = millis();
+            bool stateChanged = force || (displayedStatusActive != (int)active);
+            if (!stateChanged) {
+                if (!active || (now - lastTelemetryMs < 400)) return;
+            }
+            if (stateChanged) {
+                displayedStatusActive = (int)active;
+                tft.setTextSize(FP);
+                tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+                tft.setCursor(BORDER_PAD_X + 9 * FP * LW, statusLineY);
+                tft.print(
+                    (active && hwTxVerified) ? "ACTIVE (TX)         " : "INACTIVE (NO TX)    "
+                );
+            }
+
+            for (int ch = 0; ch < 125; ++ch) {
+                uint8_t targetState = 0;
+                if (active && hwTxVerified && txChSeen[ch]) {
+                    targetState = (ch == lastVerifiedCh) ? 2 : 1;
+                }
+                if (drawnColState[ch] != targetState) {
+                    drawnColState[ch] = targetState;
+                    uint16_t col = (targetState == 2)   ? bruceConfig.secColor
+                                   : (targetState == 1) ? bruceConfig.priColor
+                                                        : bruceConfig.bgColor;
+                    tft.drawFastVLine(barBoxX + 1 + ch, barInnerTop, barMaxH, col);
+                }
+            }
+            if (!active) {
+                memset(txChSeen, 0, sizeof(txChSeen));
+            }
+            verifiedHops = 0;
+            lastTelemetryMs = (stateChanged && active) ? (now - 360) : now;
         };
         auto stopJammerRadioLocked = [&]() {
             nrfSafeCeLow();
@@ -114,6 +162,7 @@ void nrf_jammer() {
             NRFradio.powerDown();
             nrfSafeCeLow();
             jammerRadioActive = false;
+            hwTxVerified = false;
             lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount() - 1;
         };
         auto configureJammerRadio = [&](bool rebegin, uint8_t ch) {
@@ -181,6 +230,10 @@ void nrf_jammer() {
                     (nrfReadRegister(0x06) & 0xD6) == 0x96) {
                     lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
                     jammerRadioActive = true;
+                    hwTxVerified = true;
+                    lastVerifiedCh = ch;
+                    if (ch < 125) txChSeen[ch] = 1;
+                    verifiedHops++;
                     return;
                 }
                 delay(5);
@@ -231,18 +284,18 @@ void nrf_jammer() {
                 drawMainBorderWithTitle("NRF JAMMER", false);
                 printSubtitle("NRF function Jammer");
                 statusLineY = tft.getCursorY();
-                bool isCurrentlyActive = CHECK_NRF_SPI(mode) ? jammerRadioActive : (OnX != 0 && NRFOnline > 0);
-                displayedStatusActive = (int)isCurrentlyActive;
-                padprintln(isCurrentlyActive ? "STATUS : ACTIVE       " : "STATUS : INACTIVE     ");
+                bool isCurrentlyActive = CHECK_NRF_SPI(mode) ? (jammerRadioActive && hwTxVerified) : (OnX != 0 && NRFOnline > 0);
+                padprintln("STATUS : INACTIVE (NO TX)    ");
                 String _modeName = String(modes[modeIndex].name) + "            ";
                 _modeName = _modeName.substring(0, 13);
                 padprintln("MODE : " + _modeName);
                 padprintln("HOP  : " + String(hopping_mode == 0 ? "Sequential " : "FHSS        "));
-                padprintln("");
                 padprintln("> Switch Mode: Next/Prev");
                 padprintln("> Hop Mode: Sel");
                 padprintln("> Exit: Esc");
 
+                drawTxBarFrame();
+                updateStatusDisplay(isCurrentlyActive, true);
                 tft.drawRoundRect(5, 5, tftWidth - 10, tftHeight - 10, 5, bruceConfig.priColor);
                 if ((CHECK_NRF_UART(mode)) || (CHECK_NRF_BOTH(mode))) {
                     String Mode = modes[modeIndex].name;
@@ -300,6 +353,7 @@ void nrf_jammer() {
                 }
 
                 if (!NextPress && !PrevPress && !SelPress && !EscPress) {
+                    uint8_t targetCh = modes[modeIndex].channels[ch_idx];
                     lockSysI2CBus();
                     if (digitalRead(11) == LOW) {
                         stopJammerRadioLocked();
@@ -312,17 +366,22 @@ void nrf_jammer() {
                              ((nrfReadRegister(0x00) & 0x03) != 0x02 ||
                               (nrfReadRegister(0x06) & 0xD6) != 0x96))) {
                             jammerRadioActive = false;
+                            hwTxVerified = false;
                             updateStatusDisplay(false);
-                            configureJammerRadio(true, modes[modeIndex].channels[ch_idx]);
+                            configureJammerRadio(true, targetCh);
                         } else {
                             digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
-                            NRFradio.setChannel(modes[modeIndex].channels[ch_idx]);
+                            NRFradio.setChannel(targetCh);
+                            hwTxVerified = true;
+                            lastVerifiedCh = targetCh;
+                            if (targetCh < 125) txChSeen[targetCh] = 1;
+                            verifiedHops++;
                         }
                         if (digitalRead(11) == LOW) {
                             stopJammerRadioLocked();
                         }
                         unlockSysI2CBus();
-                        updateStatusDisplay(jammerRadioActive);
+                        updateStatusDisplay(jammerRadioActive && hwTxVerified);
                     }
                 }
             }
@@ -335,6 +394,7 @@ void nrf_jammer() {
                 redraw = true;
                 waitForKeyRelease = true;
                 keyDownSwitchCount = getSysI2CPinsSwitchCount();
+                memset(txChSeen, 0, sizeof(txChSeen));
             }
             if (check(PrevPress)) {
                 modeIndex--;
@@ -344,6 +404,7 @@ void nrf_jammer() {
                 redraw = true;
                 waitForKeyRelease = true;
                 keyDownSwitchCount = getSysI2CPinsSwitchCount();
+                memset(txChSeen, 0, sizeof(txChSeen));
             }
             if (check(EscPress)) break;
             if (check(SelPress)) {
