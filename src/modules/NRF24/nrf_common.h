@@ -28,7 +28,21 @@ extern SPIClass *NRFSPI;
 NRF24_MODE nrf_setMode();
 
 bool nrf_start(NRF24_MODE mode);
-void nrf_wait_keyboard_idle(unsigned long maxWaitMs = 450);
+
+// Pull CE (GPIO8/SDA) LOW only while CSN (GPIO9/SCL) is LOW so that
+// SDA never falls while SCL is HIGH (which would generate an I2C START
+// condition on the shared GPIO8/GPIO9 keyboard/sensor I2C bus).
+static inline void nrfSafeCeLow() {
+    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+    delayMicroseconds(2);
+    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+    delayMicroseconds(2);
+    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    delayMicroseconds(2);
+}
+
+void nrfPrepareSharedPins(bool afterI2c);
+void nrfDrainPendingKeyTraffic(bool stopOnEsc);
 
 void nrf_info();
 #endif

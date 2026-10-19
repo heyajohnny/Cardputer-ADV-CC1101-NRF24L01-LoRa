@@ -27,27 +27,6 @@ void nrf_info() {
     while (!check(AnyKeyPress)) { vTaskDelay(pdMS_TO_TICKS(1)); }
 }
 
-void nrf_wait_keyboard_idle(unsigned long maxWaitMs) {
-    unsigned long waitStart = millis();
-    unsigned long idleSince = 0;
-    while (millis() - waitStart < maxWaitMs) {
-        if (EscPress) break;
-        if (digitalRead(11) == HIGH && !isSysI2CKeyHeld()) {
-            if (idleSince == 0) {
-                idleSince = millis();
-            } else if (millis() - idleSince >= 35) {
-                return;
-            }
-        } else {
-            idleSince = 0;
-        }
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
-    if (digitalRead(11) == HIGH) {
-        setSysI2CKeyHeld(false);
-    }
-}
-
 bool nrf_start(NRF24_MODE mode) {
     bool result = false;
 
@@ -82,22 +61,14 @@ bool nrf_start(NRF24_MODE mode) {
 
     if (!CHECK_NRF_SPI(mode)) return result;
 
-    // Wait until any held key is physically released and its key-release interrupt
-    // on GPIO11 is drained by InputHandler before NRF24 takes over GPIO8/GPIO9.
-    nrf_wait_keyboard_idle(450);
+    // Wait so any key-release interrupt from pressing Enter on the menu is
+    // drained by InputHandler before NRF24 takes over GPIO8/GPIO9.
+    nrfDrainPendingKeyTraffic(false);
 
     lockSysI2CBus();
 
-    // Always re-assert CE LOW and CS HIGH before begin() — these pins
-    // may have been left in an indeterminate state by the previous session,
-    // especially after stopConstCarrier() which can leave CE HIGH internally.
-    pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-    pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(5);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(5);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    // Always recover GPIO8/GPIO9 from I2C and re-assert CE LOW and CS HIGH before begin().
+    nrfPrepareSharedPins(true);
     delay(5); // Let pins settle before SPI traffic
 
     NRFSPI =
@@ -114,20 +85,22 @@ bool nrf_start(NRF24_MODE mode) {
     );
     delay(10);
 
-    for (int attempt = 0; attempt < 4; ++attempt) {
-        pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-        pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-        delayMicroseconds(5);
-        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-        delayMicroseconds(5);
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-        delay(5);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        nrfSafeCeLow();
+        NRFradio.stopConstCarrier();
+        delayMicroseconds(500);
+        NRFradio.powerDown();
+        delay(2);
         if (NRFradio.begin(
                 NRFSPI,
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
                 rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
             )) {
+            nrfSafeCeLow();
+            NRFradio.stopConstCarrier();
+            delayMicroseconds(500);
+            NRFradio.powerUp();
+            delayMicroseconds(200);
             NRFradio.setPALevel(RF24_PA_MAX, true);
             result = true;
             break;
@@ -140,6 +113,82 @@ bool nrf_start(NRF24_MODE mode) {
     }
     unlockSysI2CBus();
     return result;
+}
+
+void nrfPrepareSharedPins(bool afterI2c) {
+    if (bruceConfigPins.CC1101_bus.cs != GPIO_NUM_NC) {
+        pinMode(bruceConfigPins.CC1101_bus.cs, OUTPUT);
+        digitalWrite(bruceConfigPins.CC1101_bus.cs, HIGH);
+    }
+#if !defined(LITE_VERSION)
+    if (bruceConfigPins.LoRa_bus.cs != GPIO_NUM_NC) {
+        pinMode(bruceConfigPins.LoRa_bus.cs, OUTPUT);
+        digitalWrite(bruceConfigPins.LoRa_bus.cs, HIGH);
+    }
+#endif
+    if (bruceConfigPins.SDCARD_bus.cs != GPIO_NUM_NC) {
+        pinMode(bruceConfigPins.SDCARD_bus.cs, OUTPUT);
+        digitalWrite(bruceConfigPins.SDCARD_bus.cs, HIGH);
+    }
+
+    if (afterI2c) {
+        // If any I2C slave on GPIO8(SDA)/GPIO9(SCL) (TCA8418, ES8311, BMI270)
+        // is holding SDA (GPIO8 = NRF24 CE) LOW mid-byte, clock SCL (GPIO9)
+        // up to 9 times until the slave releases SDA HIGH.
+        pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
+        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+        pinMode(bruceConfigPins.NRF24_bus.io0, INPUT_PULLUP);
+        delayMicroseconds(5);
+        for (int clk = 0; clk < 9 && digitalRead(bruceConfigPins.NRF24_bus.io0) == LOW; ++clk) {
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
+            delayMicroseconds(5);
+            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+            delayMicroseconds(5);
+        }
+    }
+
+    pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
+    pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
+
+    if (afterI2c) {
+        // Issue a clean I2C STOP condition (SDA/io0 LOW -> HIGH while SCL/cs is HIGH)
+        // to terminate any spurious I2C START condition created when setI2cPinsTooutput()
+        // switched GPIO8/GPIO9 back from Wire1.
+        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+        delayMicroseconds(2);
+        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+        delayMicroseconds(3);
+        digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
+        delayMicroseconds(3);
+    }
+
+    // Set CE (GPIO8/SDA) LOW while CSN (GPIO9/SCL) is LOW so no I2C START condition is generated.
+    nrfSafeCeLow();
+    delayMicroseconds(5);
+}
+
+void nrfDrainPendingKeyTraffic(bool stopOnEsc) {
+    unsigned long waitStart = millis();
+    while (millis() - waitStart < 350) {
+        if (stopOnEsc && EscPress) break;
+        if (stopOnEsc && AnyKeyPress && !EscPress) {
+            // Clear AnyKeyPress so taskInputHandler is not throttled by its 75 ms gate
+            // and can immediately service the key-release interrupt on GPIO11.
+            AnyKeyPress = false;
+        }
+        uint32_t switchSnap = getSysI2CPinsSwitchCount();
+        vTaskDelay(pdMS_TO_TICKS(20));
+        if (stopOnEsc && EscPress) break;
+        if (stopOnEsc && AnyKeyPress && !EscPress) {
+            AnyKeyPress = false;
+        }
+        if (digitalRead(11) == HIGH && (!AnyKeyPress || (stopOnEsc && EscPress)) && !SelPress) {
+            vTaskDelay(pdMS_TO_TICKS(60));
+            if (digitalRead(11) == HIGH && getSysI2CPinsSwitchCount() == switchSnap) {
+                break;
+            }
+        }
+    }
 }
 
 NRF24_MODE nrf_setMode() {

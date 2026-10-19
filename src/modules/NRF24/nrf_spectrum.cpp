@@ -8,48 +8,40 @@
 uint8_t channel[CHANNELS];
 static uint32_t lastSpectrumI2cSwitchCount = 0;
 
-static void prepareSharedNrfPins() {
-    if (bruceConfigPins.CC1101_bus.cs != GPIO_NUM_NC) {
-        pinMode(bruceConfigPins.CC1101_bus.cs, OUTPUT);
-        digitalWrite(bruceConfigPins.CC1101_bus.cs, HIGH);
-    }
-#if !defined(LITE_VERSION)
-    if (bruceConfigPins.LoRa_bus.cs != GPIO_NUM_NC) {
-        pinMode(bruceConfigPins.LoRa_bus.cs, OUTPUT);
-        digitalWrite(bruceConfigPins.LoRa_bus.cs, HIGH);
-    }
-#endif
-    if (bruceConfigPins.SDCARD_bus.cs != GPIO_NUM_NC) {
-        pinMode(bruceConfigPins.SDCARD_bus.cs, OUTPUT);
-        digitalWrite(bruceConfigPins.SDCARD_bus.cs, HIGH);
-    }
-
-    // Set CE (GPIO8/SDA) LOW while CSN (GPIO9/SCL) is LOW so no I2C START condition is generated
-    pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-    pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-    delayMicroseconds(5);
-}
-
 static void configureSpectrumRadio(bool rebegin) {
-    for (int attempt = 0; attempt < 4; ++attempt) {
-        prepareSharedNrfPins();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        nrfPrepareSharedPins(rebegin || attempt > 0);
 
         if (rebegin || attempt > 0) {
             delay(5);
+            NRFSPI->begin(
+                (int8_t)bruceConfigPins.NRF24_bus.sck,
+                (int8_t)bruceConfigPins.NRF24_bus.miso,
+                (int8_t)bruceConfigPins.NRF24_bus.mosi,
+                -1
+            );
+            delay(10);
+            // Cleanly exit any continuous wave or active RX/TX state and give the PA+LNA /
+            // Si24R1 crystal oscillator time to settle before re-initializing registers.
+            nrfSafeCeLow();
+            NRFradio.stopConstCarrier();
+            delayMicroseconds(500);
+            NRFradio.powerDown();
+            delay(2);
             if (!NRFradio.begin(
                     NRFSPI,
                     rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
                     rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
                 )) {
-                delay(5);
+                delay(10);
                 continue;
             }
         }
+        nrfSafeCeLow();
+        NRFradio.stopConstCarrier();
+        delayMicroseconds(500);
+        NRFradio.powerUp();
+        delayMicroseconds(200);
         NRFradio.setPALevel(RF24_PA_MAX, true);
         NRFradio.setAutoAck(false);
         NRFradio.disableCRC();       // accept any signal we find
@@ -65,23 +57,18 @@ static void configureSpectrumRadio(bool rebegin) {
         for (uint8_t i = 0; i < 6; ++i) { NRFradio.openReadingPipe(i, noiseAddress[i]); }
         NRFradio.setDataRate(RF24_1MBPS);
         NRFradio.startListening();
+        nrfSafeCeLow();
         NRFradio.stopListening();
         NRFradio.flush_rx();
         NRFradio.flush_tx();
+        nrfSafeCeLow();
 
-        // Leave CE LOW while CSN is LOW so no I2C START condition is left on GPIO8/9
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-        delayMicroseconds(2);
-        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-        delayMicroseconds(2);
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-
-        // Verify both non-default (SETUP_AW == 0) and non-zero (RF_CH == 42, PA == MAX)
-        // registers read back intact before marking the radio as configured.
+        // Verify that registers written above read back intact
+        // before marking the radio as configured.
         NRFradio.setChannel(42);
         if (NRFradio.getChannel() == 42 &&
-            NRFradio.isChipConnected() &&
-            NRFradio.getPALevel() == RF24_PA_MAX) {
+            NRFradio.getPALevel() == RF24_PA_MAX &&
+            NRFradio.getCRCLength() == RF24_CRC_DISABLED) {
             lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount();
             return;
         }
@@ -94,41 +81,29 @@ static void configureSpectrumRadio(bool rebegin) {
 String scanChannels(bool web) {
     String result = "{";
 
-    if (digitalRead(11) == LOW || isSysI2CKeyHeld() ||
-        getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount) {
-        nrf_wait_keyboard_idle(450);
+    if (getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount ||
+        digitalRead(11) == LOW ||
+        (AnyKeyPress && !EscPress)) {
+        nrfDrainPendingKeyTraffic(true);
         if (EscPress) return result;
     }
 
     uint8_t rpdValues[CHANNELS] = {0};
     lockSysI2CBus();
     if (getSysI2CPinsSwitchCount() != lastSpectrumI2cSwitchCount ||
-        !NRFradio.isChipConnected() ||
-        NRFradio.getPALevel() != RF24_PA_MAX) {
+        NRFradio.getPALevel() != RF24_PA_MAX ||
+        NRFradio.getCRCLength() != RF24_CRC_DISABLED) {
         configureSpectrumRadio(true);
     } else {
-        pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-        pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
+        nrfPrepareSharedPins(false);
     }
 
     for (int i = 0; i < CHANNELS; i++) {
-        if (digitalRead(11) == LOW) {
-            NRFradio.stopListening();
-            NRFradio.powerDown();
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-            unlockSysI2CBus();
-            return result;
-        }
         NRFradio.setChannel(i);
         NRFradio.startListening();
         delayMicroseconds(160);
         bool foundSignal = NRFradio.testRPD();
+        nrfSafeCeLow();
         NRFradio.stopListening();
 
         int rpd = 0;
@@ -141,11 +116,14 @@ String scanChannels(bool web) {
     }
 
     // Leave CE LOW while CSN is LOW so no I2C START condition is left on GPIO8/9
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    nrfSafeCeLow();
+    if (digitalRead(11) == LOW) {
+        // A keyboard interrupt is pending; power down the radio before releasing the bus
+        // so the NRF24 ignores CE (GPIO8/SDA) during Wire1 I2C traffic.
+        NRFradio.powerDown();
+        nrfSafeCeLow();
+        lastSpectrumI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+    }
     unlockSysI2CBus();
 
     for (int i = 0; i < CHANNELS; i++) {
@@ -189,26 +167,15 @@ void nrf_spectrum() {
         unlockSysI2CBus();
 
         while (!check(EscPress)) {
-            if (!EscPress) {
-                AnyKeyPress = false;
-                SelPress = false;
-                PrevPress = false;
-                NextPress = false;
-                UpPress = false;
-                DownPress = false;
-            }
+            if (AnyKeyPress && !EscPress) { AnyKeyPress = false; }
             scanChannels();
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         lockSysI2CBus();
-        prepareSharedNrfPins();
+        nrfPrepareSharedPins(false);
         NRFradio.stopListening();
         NRFradio.powerDown();
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-        delayMicroseconds(2);
-        digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-        delayMicroseconds(2);
-        digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+        nrfSafeCeLow();
         unlockSysI2CBus();
         delay(250);
         return;

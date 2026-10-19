@@ -652,26 +652,36 @@ static bool mj_scan() {
     // Configure promiscuous mode
     uint32_t lastMjI2cSwitchCount = 0;
     auto configureMjScanRadio = [&](bool rebegin) {
-        for (int attempt = 0; attempt < 4; ++attempt) {
-            pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-            pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
-            delayMicroseconds(5);
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            nrfPrepareSharedPins(rebegin || attempt > 0);
             if (rebegin || attempt > 0) {
                 delay(5);
+                NRFSPI->begin(
+                    (int8_t)bruceConfigPins.NRF24_bus.sck,
+                    (int8_t)bruceConfigPins.NRF24_bus.miso,
+                    (int8_t)bruceConfigPins.NRF24_bus.mosi,
+                    -1
+                );
+                delay(10);
+                nrfSafeCeLow();
+                NRFradio.stopConstCarrier();
+                delayMicroseconds(500);
+                NRFradio.powerDown();
+                delay(2);
                 if (!NRFradio.begin(
                         NRFSPI,
                         rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
                         rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
                     )) {
-                    delay(5);
+                    delay(10);
                     continue;
                 }
             }
+            nrfSafeCeLow();
+            NRFradio.stopConstCarrier();
+            delayMicroseconds(500);
+            NRFradio.powerUp();
+            delayMicroseconds(200);
             NRFradio.setPALevel(RF24_PA_MAX, true);
             NRFradio.setAutoAck(false);
             NRFradio.disableCRC();
@@ -693,8 +703,8 @@ static bool mj_scan() {
             for (uint8_t i = 0; i < 6; i++) { NRFradio.openReadingPipe(i, noiseAddress[i]); }
             NRFradio.setChannel(42);
             if (NRFradio.getChannel() == 42 &&
-                NRFradio.isChipConnected() &&
-                NRFradio.getPALevel() == RF24_PA_MAX) {
+                NRFradio.getPALevel() == RF24_PA_MAX &&
+                NRFradio.getCRCLength() == RF24_CRC_DISABLED) {
                 lastMjI2cSwitchCount = getSysI2CPinsSwitchCount();
                 return;
             }
@@ -719,11 +729,10 @@ static bool mj_scan() {
                 scanning = false;
                 break;
             }
-            if (AnyKeyPress && !EscPress) { AnyKeyPress = false; }
-
-            if (digitalRead(11) == LOW || isSysI2CKeyHeld() ||
-                getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount) {
-                nrf_wait_keyboard_idle(450);
+            if (getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount ||
+                digitalRead(11) == LOW ||
+                (AnyKeyPress && !EscPress)) {
+                nrfDrainPendingKeyTraffic(true);
                 if (check(EscPress)) {
                     scanning = false;
                     break;
@@ -732,8 +741,8 @@ static bool mj_scan() {
 
             lockSysI2CBus();
             if (getSysI2CPinsSwitchCount() != lastMjI2cSwitchCount ||
-                !NRFradio.isChipConnected() ||
-                NRFradio.getPALevel() != RF24_PA_MAX) {
+                NRFradio.getPALevel() != RF24_PA_MAX ||
+                NRFradio.getCRCLength() != RF24_CRC_DISABLED) {
                 configureMjScanRadio(true);
             }
             NRFradio.setChannel(ch);
@@ -749,12 +758,14 @@ static bool mj_scan() {
                 }
             }
 
+            nrfSafeCeLow();
             NRFradio.stopListening();
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-            delayMicroseconds(2);
-            digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+            nrfSafeCeLow();
+            if (digitalRead(11) == LOW) {
+                NRFradio.powerDown();
+                nrfSafeCeLow();
+                lastMjI2cSwitchCount = getSysI2CPinsSwitchCount() ^ 1;
+            }
             unlockSysI2CBus();
 
             // Refresh display periodically
@@ -768,20 +779,10 @@ static bool mj_scan() {
     }
 
     lockSysI2CBus();
-    pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
-    pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    nrfPrepareSharedPins(false);
     NRFradio.stopListening();
     NRFradio.powerDown();
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.io0, LOW);
-    delayMicroseconds(2);
-    digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
+    nrfSafeCeLow();
     unlockSysI2CBus();
     return (mj_targetCount > 0);
 }

@@ -55,8 +55,6 @@ bool trylockSysI2CBus();
 
 void notifySysI2CPinsSwitched();
 uint32_t getSysI2CPinsSwitchCount();
-void setSysI2CKeyHeld(bool held);
-bool isSysI2CKeyHeld();
 
 /*
  * SPI bus arbitration.

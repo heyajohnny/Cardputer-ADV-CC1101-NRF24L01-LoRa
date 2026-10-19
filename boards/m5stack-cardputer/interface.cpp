@@ -37,41 +37,15 @@ char getKeyChar(uint8_t row, uint8_t col) {
 // Keep them as GPIO unless a keyboard or codec transaction needs I2C.
 void setI2cPinsTooutput() {
     Wire1.end();
-    // Ensure no I2C slave on GPIO8/9 is holding SDA (GPIO8 / NRF24 CE) LOW after Wire1.end().
-    pinMode(TCA8418_SDA_PIN, INPUT_PULLUP);
-    pinMode(TCA8418_SCL_PIN, INPUT_PULLUP);
-    delayMicroseconds(5);
-    if (digitalRead(TCA8418_SDA_PIN) == LOW) {
-        digitalWrite(TCA8418_SDA_PIN, HIGH);
-        digitalWrite(TCA8418_SCL_PIN, HIGH);
-        pinMode(TCA8418_SDA_PIN, OUTPUT_OPEN_DRAIN);
-        pinMode(TCA8418_SCL_PIN, OUTPUT_OPEN_DRAIN);
-        delayMicroseconds(5);
-        for (int i = 0; i < 9 && digitalRead(TCA8418_SDA_PIN) == LOW; ++i) {
-            digitalWrite(TCA8418_SCL_PIN, LOW);
-            delayMicroseconds(5);
-            digitalWrite(TCA8418_SCL_PIN, HIGH);
-            delayMicroseconds(5);
-        }
-        digitalWrite(TCA8418_SCL_PIN, LOW);
-        delayMicroseconds(5);
-        digitalWrite(TCA8418_SDA_PIN, LOW);
-        delayMicroseconds(5);
-        digitalWrite(TCA8418_SCL_PIN, HIGH);
-        delayMicroseconds(5);
-        digitalWrite(TCA8418_SDA_PIN, HIGH);
-        delayMicroseconds(5);
-    }
     // Transition SDA (GPIO8 / NRF24 CE) LOW while SCL (GPIO9 / NRF24 CSN) is LOW
     // so I2C slaves on GPIO8/9 do not see an I2C START condition (SDA falling while SCL HIGH).
     pinMode(TCA8418_SCL_PIN, OUTPUT);
     pinMode(TCA8418_SDA_PIN, OUTPUT);
     digitalWrite(TCA8418_SCL_PIN, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(2);
     digitalWrite(TCA8418_SDA_PIN, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(2);
     digitalWrite(TCA8418_SCL_PIN, HIGH);
-    delayMicroseconds(5);
     notifySysI2CPinsSwitched();
 }
 
@@ -327,8 +301,6 @@ void InputHandler(void) {
                 kb_interrupt = true;
             }
 
-            static uint64_t s_tcaHeldMask[2] = {0, 0};
-
             for (int pass = 0; pass < 3; ++pass) {
                 while (tca.available() > 0) {
                     int keyEvent = tca.getEvent();
@@ -338,14 +310,6 @@ void InputHandler(void) {
                     uint8_t row, col;
                     mapRawKeyToPhysical(value, row, col);
                     if (row >= 4 || col >= 14) continue;
-                    if (value < 128) {
-                        if (pressed) {
-                            s_tcaHeldMask[value >> 6] |= (1ULL << (value & 63));
-                        } else {
-                            s_tcaHeldMask[value >> 6] &= ~(1ULL << (value & 63));
-                        }
-                        setSysI2CKeyHeld((s_tcaHeldMask[0] | s_tcaHeldMask[1]) != 0);
-                    }
                     if (wakeUpScreen()) continue;
 
                     if (pressed) AnyKeyPress = true;
@@ -476,9 +440,6 @@ void InputHandler(void) {
                 }
                 if (pass == 2 && digitalRead(11) == LOW) {
                     tca.flush();
-                    s_tcaHeldMask[0] = 0;
-                    s_tcaHeldMask[1] = 0;
-                    setSysI2CKeyHeld(false);
                     tca.writeRegister(TCA8418_REG_INT_STAT, 0x1F);
                     kb_interrupt = false;
                 }
