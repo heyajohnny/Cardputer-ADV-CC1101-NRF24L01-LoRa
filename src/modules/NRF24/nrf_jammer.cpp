@@ -75,13 +75,9 @@ void nrf_jammer() {
     static uint8_t customStart = 0;  // NRF ch 0   -> 2400 MHz
     static uint8_t customEnd = 80;   // NRF ch 80  -> 2480 MHz
     static uint8_t customStep = 1;   // channel increment
-    static rf24_datarate_e jammerDataRate = RF24_2MBPS;
     static uint8_t custom_channels[126];
     static size_t custom_count = 0;
 
-    auto dataRateName = [](rf24_datarate_e r) -> const char * {
-        return r == RF24_2MBPS ? "2 Mbps" : (r == RF24_1MBPS ? "1 Mbps" : "250 kbps");
-    };
     auto rebuildCustomRange = [&]() {
         uint8_t lo = customStart < customEnd ? customStart : customEnd;
         uint8_t hi = customStart < customEnd ? customEnd : customStart;
@@ -239,8 +235,7 @@ void nrf_jammer() {
                 NRFradio.startConstCarrier(RF24_PA_MAX, ch);
                 NRFradio.setAddressWidth(5);
                 NRFradio.setPayloadSize(2);
-                bool dataRateOk = NRFradio.setDataRate(jammerDataRate);
-                if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_2MBPS);
+                bool dataRateOk = NRFradio.setDataRate(RF24_2MBPS);
                 if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_1MBPS);
                 if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_250KBPS);
                 if (!dataRateOk) Serial.println("Failed to set NRF data rate");
@@ -286,16 +281,6 @@ void nrf_jammer() {
                                         int n = v.toInt();
                                         if (n >= 1 && n <= 20) customStep = (uint8_t)n;
                                     }
-                                }});
-                opts.push_back({String("Rate: ") + dataRateName(jammerDataRate), [&]() {
-                                    std::vector<Option> drOpts;
-                                    drOpts.push_back({"2 Mbps", [&]() { jammerDataRate = RF24_2MBPS; }});
-                                    drOpts.push_back({"1 Mbps", [&]() { jammerDataRate = RF24_1MBPS; }});
-                                    drOpts.push_back({"250 kbps", [&]() { jammerDataRate = RF24_250KBPS; }});
-                                    int cur = jammerDataRate == RF24_2MBPS   ? 0
-                                              : jammerDataRate == RF24_1MBPS ? 1
-                                                                             : 2;
-                                    loopOptions(drOpts, MENU_TYPE_SUBMENU, "Data rate", cur);
                                 }});
                 opts.push_back({String("Hop: ") + (hopping_mode == 0 ? "Sequential" : "FHSS"), [&]() {
                                     std::vector<Option> hopOpts;
@@ -367,10 +352,7 @@ void nrf_jammer() {
                     uint8_t lo = customStart < customEnd ? customStart : customEnd;
                     uint8_t hi = customStart < customEnd ? customEnd : customStart;
                     padprintln("RANGE: " + String(2400 + lo) + "-" + String(2400 + hi) + " MHz");
-                    padprintln(
-                        "RATE : " + String(dataRateName(jammerDataRate)) + " " +
-                        String(hopping_mode == 0 ? "Seq" : "FHSS")
-                    );
+                    padprintln("HOP  : " + String(hopping_mode == 0 ? "Sequential " : "FHSS        "));
                     padprintln("> Cfg:Sel  Switch:Next/Prev");
                     padprintln("> Exit: Esc");
                 } else {
