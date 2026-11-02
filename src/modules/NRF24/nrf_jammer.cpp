@@ -72,19 +72,31 @@ void nrf_jammer() {
                                 52, 56, 60, 64, 68, 72}; // WiFi ch11 (2452-2472 MHz)
 
     // --- Custom range ("own bandwidth") settings, remembered across sessions ---
-    static uint8_t customStart = 0;  // NRF ch 0   -> 2400 MHz
-    static uint8_t customEnd = 80;   // NRF ch 80  -> 2480 MHz
-    static uint8_t customStep = 1;   // channel increment
+    static uint8_t customStart = 0;      // NRF ch 0   -> 2400 MHz
+    static uint8_t customEnd = 80;        // NRF ch 80  -> 2480 MHz
+    static uint8_t customStep = 1;        // channel increment
+    static uint8_t customSweepStart = 0;  // channel where the sweep begins (0 => lowest)
     static uint8_t custom_channels[126];
     static size_t custom_count = 0;
 
     auto rebuildCustomRange = [&]() {
         uint8_t lo = customStart < customEnd ? customStart : customEnd;
         uint8_t hi = customStart < customEnd ? customEnd : customStart;
+        // Build the ascending channel grid first.
+        uint8_t grid[126];
         size_t n = 0;
-        for (uint16_t ch = lo; ch <= hi && n < sizeof(custom_channels); ch += customStep)
-            custom_channels[n++] = (uint8_t)ch;
-        if (n == 0) custom_channels[n++] = lo; // always keep at least one channel
+        for (uint16_t ch = lo; ch <= hi && n < sizeof(grid); ch += customStep) grid[n++] = (uint8_t)ch;
+        if (n == 0) grid[n++] = lo; // always keep at least one channel
+        // Rotate so the sweep begins at the first channel >= customSweepStart.
+        uint8_t sweep = customSweepStart < lo ? lo : (customSweepStart > hi ? hi : customSweepStart);
+        size_t off = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (grid[i] >= sweep) {
+                off = i;
+                break;
+            }
+        }
+        for (size_t i = 0; i < n; i++) custom_channels[i] = grid[(off + i) % n];
         custom_count = n;
     };
     rebuildCustomRange();
@@ -280,6 +292,14 @@ void nrf_jammer() {
                                     if (v != "\x1B" && v.length()) {
                                         int n = v.toInt();
                                         if (n >= 1 && n <= 20) customStep = (uint8_t)n;
+                                    }
+                                }});
+                opts.push_back({String("Sweep start ch: ") + String(customSweepStart), [&]() {
+                                    String v =
+                                        num_keyboard(String(customSweepStart), 3, "Sweep start ch (0-125):");
+                                    if (v != "\x1B" && v.length()) {
+                                        int n = v.toInt();
+                                        if (n >= 0 && n <= 125) customSweepStart = (uint8_t)n;
                                     }
                                 }});
                 opts.push_back({String("Hop: ") + (hopping_mode == 0 ? "Sequential" : "FHSS"), [&]() {
