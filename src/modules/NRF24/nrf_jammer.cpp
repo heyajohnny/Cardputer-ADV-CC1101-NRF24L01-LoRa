@@ -67,6 +67,32 @@ void nrf_jammer() {
         79, 80, 81  // ch26
     };
 
+    byte wifi1611_channels[] = {2,  6,  10, 14, 18, 22,  // WiFi ch1  (2402-2422 MHz)
+                                27, 31, 35, 39, 43, 47,  // WiFi ch6  (2427-2447 MHz)
+                                52, 56, 60, 64, 68, 72}; // WiFi ch11 (2452-2472 MHz)
+
+    // --- Custom range ("own bandwidth") settings, remembered across sessions ---
+    static uint8_t customStart = 0;  // NRF ch 0   -> 2400 MHz
+    static uint8_t customEnd = 80;   // NRF ch 80  -> 2480 MHz
+    static uint8_t customStep = 1;   // channel increment
+    static rf24_datarate_e jammerDataRate = RF24_2MBPS;
+    static uint8_t custom_channels[126];
+    static size_t custom_count = 0;
+
+    auto dataRateName = [](rf24_datarate_e r) -> const char * {
+        return r == RF24_2MBPS ? "2 Mbps" : (r == RF24_1MBPS ? "1 Mbps" : "250 kbps");
+    };
+    auto rebuildCustomRange = [&]() {
+        uint8_t lo = customStart < customEnd ? customStart : customEnd;
+        uint8_t hi = customStart < customEnd ? customEnd : customStart;
+        size_t n = 0;
+        for (uint16_t ch = lo; ch <= hi && n < sizeof(custom_channels); ch += customStep)
+            custom_channels[n++] = (uint8_t)ch;
+        if (n == 0) custom_channels[n++] = lo; // always keep at least one channel
+        custom_count = n;
+    };
+    rebuildCustomRange();
+
     struct jamMode {
         const char *name;
         byte *channels;
@@ -83,8 +109,12 @@ void nrf_jammer() {
         {"Video Stream", video_channels,     sizeof(video_channels) / sizeof(video_channels[0])        },
         {"RC          ", rc_channels,        sizeof(rc_channels) / sizeof(rc_channels[0])              },
         {"Zigbee      ", zigbee_channels,    sizeof(zigbee_channels) / sizeof(zigbee_channels[0])      },
-        {"Full        ", full_channels,      sizeof(full_channels) / sizeof(full_channels[0])          }
+        {"Full        ", full_channels,      sizeof(full_channels) / sizeof(full_channels[0])          },
+        {"WiFi 1/6/11 ", wifi1611_channels,  sizeof(wifi1611_channels) / sizeof(wifi1611_channels[0])  },
+        {"Custom      ", custom_channels,    custom_count                                               }
     };
+    int customModeIndex = (int)(sizeof(modes) / sizeof(modes[0])) - 1;
+    modes[customModeIndex].count = custom_count;
 
     if (nrf_start(mode)) {
 
@@ -103,7 +133,7 @@ void nrf_jammer() {
         unsigned long lastTelemetryMs = millis();
         uint8_t txChSeen[125] = {0};
         uint8_t drawnColState[125] = {0};
-        uint8_t shuffled_idx[124];
+        uint8_t shuffled_idx[126];
         uint32_t lastJammerI2cSwitchCount = getSysI2CPinsSwitchCount();
         const int16_t barBoxX = 55;
         const int16_t barBoxY = 110;
@@ -209,18 +239,11 @@ void nrf_jammer() {
                 NRFradio.startConstCarrier(RF24_PA_MAX, ch);
                 NRFradio.setAddressWidth(5);
                 NRFradio.setPayloadSize(2);
-                bool dataRateOk = NRFradio.setDataRate(RF24_2MBPS);
-                if (!dataRateOk) {
-                    Serial.println("Failed to set data rate to 2Mbps, trying 1Mbps");
-                    dataRateOk = NRFradio.setDataRate(RF24_1MBPS);
-                    if (!dataRateOk) {
-                        Serial.println("Failed to set data rate to 1Mbps, trying 250kbps");
-                        dataRateOk = NRFradio.setDataRate(RF24_250KBPS);
-                        if (!dataRateOk) {
-                            Serial.println("Failed to set data rate to 250kbps, giving up");
-                        }
-                    }
-                }
+                bool dataRateOk = NRFradio.setDataRate(jammerDataRate);
+                if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_2MBPS);
+                if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_1MBPS);
+                if (!dataRateOk) dataRateOk = NRFradio.setDataRate(RF24_250KBPS);
+                if (!dataRateOk) Serial.println("Failed to set NRF data rate");
                 digitalWrite(bruceConfigPins.NRF24_bus.io0, HIGH);
                 // Verify NRF_CONFIG (0x00) has PWR_UP=1, PRIM_RX=0 (0x02) and
                 // RF_SETUP (0x06) has CONT_WAVE=1, bit6=0, PLL_LOCK=1, PA_MAX (0x96).
@@ -239,6 +262,57 @@ void nrf_jammer() {
                 delay(5);
             }
         };
+        auto openCustomConfig = [&]() {
+            bool done = false;
+            while (!done) {
+                std::vector<Option> opts;
+                opts.push_back({String("Start ch: ") + String(customStart), [&]() {
+                                    String v = num_keyboard(String(customStart), 3, "Start channel (0-125):");
+                                    if (v != "\x1B" && v.length()) {
+                                        int n = v.toInt();
+                                        if (n >= 0 && n <= 125) customStart = (uint8_t)n;
+                                    }
+                                }});
+                opts.push_back({String("End ch: ") + String(customEnd), [&]() {
+                                    String v = num_keyboard(String(customEnd), 3, "End channel (0-125):");
+                                    if (v != "\x1B" && v.length()) {
+                                        int n = v.toInt();
+                                        if (n >= 0 && n <= 125) customEnd = (uint8_t)n;
+                                    }
+                                }});
+                opts.push_back({String("Step: ") + String(customStep), [&]() {
+                                    String v = num_keyboard(String(customStep), 3, "Step (1-20):");
+                                    if (v != "\x1B" && v.length()) {
+                                        int n = v.toInt();
+                                        if (n >= 1 && n <= 20) customStep = (uint8_t)n;
+                                    }
+                                }});
+                opts.push_back({String("Rate: ") + dataRateName(jammerDataRate), [&]() {
+                                    std::vector<Option> drOpts;
+                                    drOpts.push_back({"2 Mbps", [&]() { jammerDataRate = RF24_2MBPS; }});
+                                    drOpts.push_back({"1 Mbps", [&]() { jammerDataRate = RF24_1MBPS; }});
+                                    drOpts.push_back({"250 kbps", [&]() { jammerDataRate = RF24_250KBPS; }});
+                                    int cur = jammerDataRate == RF24_2MBPS   ? 0
+                                              : jammerDataRate == RF24_1MBPS ? 1
+                                                                             : 2;
+                                    loopOptions(drOpts, MENU_TYPE_SUBMENU, "Data rate", cur);
+                                }});
+                opts.push_back({String("Hop: ") + (hopping_mode == 0 ? "Sequential" : "FHSS"), [&]() {
+                                    std::vector<Option> hopOpts;
+                                    hopOpts.push_back({"Sequential", [&]() { hopping_mode = 0; }});
+                                    hopOpts.push_back({"FHSS", [&]() { hopping_mode = 1; }});
+                                    loopOptions(hopOpts, MENU_TYPE_SUBMENU, "Hop mode", hopping_mode);
+                                }});
+                opts.push_back({">> Start Jamming <<", [&]() { done = true; }});
+                int sel = loopOptions(opts, MENU_TYPE_SUBMENU, "Custom Jammer");
+                if (sel < 0) done = true; // Esc / back exits the config screen
+            }
+            rebuildCustomRange();
+            modes[customModeIndex].count = custom_count;
+            tft.fillScreen(bruceConfig.bgColor); // wipe menu so jammer redraw starts clean
+            redraw = true;
+        };
+
         if (CHECK_NRF_SPI(mode)) {
             // Keep the radio powered down while drawing the initial border and waiting
             // 50 ms so any trailing Enter key-release interrupt on GPIO11 is serviced
@@ -289,10 +363,22 @@ void nrf_jammer() {
                 String _modeName = String(modes[modeIndex].name) + "            ";
                 _modeName = _modeName.substring(0, 13);
                 padprintln("MODE : " + _modeName);
-                padprintln("HOP  : " + String(hopping_mode == 0 ? "Sequential " : "FHSS        "));
-                padprintln("> Switch Mode: Next/Prev");
-                padprintln("> Hop Mode: Sel");
-                padprintln("> Exit: Esc");
+                if (modeIndex == customModeIndex) {
+                    uint8_t lo = customStart < customEnd ? customStart : customEnd;
+                    uint8_t hi = customStart < customEnd ? customEnd : customStart;
+                    padprintln("RANGE: " + String(2400 + lo) + "-" + String(2400 + hi) + " MHz");
+                    padprintln(
+                        "RATE : " + String(dataRateName(jammerDataRate)) + " " +
+                        String(hopping_mode == 0 ? "Seq" : "FHSS")
+                    );
+                    padprintln("> Cfg:Sel  Switch:Next/Prev");
+                    padprintln("> Exit: Esc");
+                } else {
+                    padprintln("HOP  : " + String(hopping_mode == 0 ? "Sequential " : "FHSS        "));
+                    padprintln("> Switch Mode: Next/Prev");
+                    padprintln("> Hop Mode: Sel");
+                    padprintln("> Exit: Esc");
+                }
 
                 drawTxBarFrame();
                 updateStatusDisplay(isCurrentlyActive, true);
@@ -408,8 +494,18 @@ void nrf_jammer() {
             }
             if (check(EscPress)) break;
             if (check(SelPress)) {
-                hopping_mode++;
-                if (hopping_mode > 1) hopping_mode = 0;
+                if (modeIndex == customModeIndex) {
+                    if (CHECK_NRF_SPI(mode) && jammerRadioActive) {
+                        lockSysI2CBus();
+                        stopJammerRadioLocked();
+                        unlockSysI2CBus();
+                    }
+                    updateStatusDisplay(false);
+                    openCustomConfig();
+                } else {
+                    hopping_mode++;
+                    if (hopping_mode > 1) hopping_mode = 0;
+                }
                 hopIndex = 0;
                 need_reshuffle = true;
                 redraw = true;
