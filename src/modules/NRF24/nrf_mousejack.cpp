@@ -1015,25 +1015,62 @@ static void mj_targetListMenu() {
 // ═══════════════ MAIN MOUSEJACK MENU ══════════════════════════
 // ══════════════════════════════════════════════════════════════════
 
-void nrf_mousejack() {
-    options = {
-        {"Set NRF Mode",
-         [=]() {
-             NRF24_MODE selected = nrf_setMode();
-             if (selected != NRF_MODE_DISABLED) mj_nrfMode = selected;
-         }                                             },
-        {"Scan Devices",
-         [=]() {
-             if (mj_scan()) {
-                 mj_targetListMenu();
-             } else {
-                 displayInfo("No devices found", true);
-             }
-         }                                             },
-        {"View Targets", [=]() { mj_targetListMenu(); }},
-        {"Main Menu",    [=]() { returnToMenu = true; }},
-    };
+static const char *mj_modeName(NRF24_MODE mode) {
+    switch (mode) {
+        case NRF_MODE_SPI: return "SPI";
+        case NRF_MODE_UART: return "UART";
+        case NRF_MODE_BOTH: return "SPI+UART";
+        default: return "Off";
+    }
+}
 
-    loopOptions(options, MENU_TYPE_SUBMENU, "MouseJack");
+static bool mj_spiPinsOk() { return !bruceConfigPins.NRF24_bus.checkConflict(GPIO_NUM_NC); }
+
+static bool mj_uartPinsOk() {
+    if (bruceConfigPins.uart_bus.checkConflict(GPIO_NUM_NC)) return false;
+    if (bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.uart_bus.rx)) return false;
+    if (bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.uart_bus.tx)) return false;
+    return true;
+}
+
+// nrf_setMode() only auto-detects and returns. MouseJack needs an actual picker,
+// otherwise "Set NRF Mode" exits straight back to the previous menu.
+static void mj_chooseNrfMode() {
+    NRF24_MODE selected = NRF_MODE_DISABLED;
+    options = {
+        {"SPI",      [&]() { selected = NRF_MODE_SPI; },  mj_nrfMode == NRF_MODE_SPI },
+        {"SPI+UART", [&]() { selected = NRF_MODE_BOTH; }, mj_nrfMode == NRF_MODE_BOTH},
+        {"Back",     [&]() {}                                                      },
+    };
+    loopOptions(options, MENU_TYPE_SUBMENU, "NRF Mode");
+    if (selected == NRF_MODE_DISABLED) return;
+
+    if (!mj_spiPinsOk()) {
+        displayError("NRF24 pins not configured", true);
+        return;
+    }
+    if (CHECK_NRF_UART(selected) && !mj_uartPinsOk()) {
+        displayError("UART pins not available", true);
+        return;
+    }
+
+    mj_nrfMode = selected;
+    displaySuccess(String("NRF mode: ") + mj_modeName(selected), true);
+}
+
+void nrf_mousejack() {
+    bool stay = true;
+    while (stay && !returnToMenu) {
+        options.clear();
+        options.push_back({String("NRF Mode: ") + mj_modeName(mj_nrfMode), []() { mj_chooseNrfMode(); }});
+        options.push_back({"Scan Devices", []() {
+                               if (mj_scan()) mj_targetListMenu();
+                               else displayInfo("No devices found", true);
+                           }});
+        options.push_back({"View Targets", []() { mj_targetListMenu(); }});
+        options.push_back({"Back", [&]() { stay = false; }});
+
+        if (loopOptions(options, MENU_TYPE_SUBMENU, "MouseJack") < 0) break;
+    }
 }
 #endif
